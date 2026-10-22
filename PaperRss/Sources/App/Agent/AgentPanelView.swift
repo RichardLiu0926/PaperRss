@@ -29,7 +29,9 @@ final class AgentPanelModel: ObservableObject {
     @Published private(set) var digestProgress: AgentDigestProgress?
     @Published private(set) var isDigesting = false
     @Published var digestError: String?
+    @Published private(set) var sessions: [AgentSession] = []
 
+    private let sessionRepository: AgentSessionRepository
     private let query: AgentArticleQuery
     private let digestPipeline: AgentDigestPipeline
     private let digestCache: AgentDigestCache
@@ -42,6 +44,7 @@ final class AgentPanelModel: ObservableObject {
     init(store: AppStore) {
         self.store = store
         let database = store.libraryDatabase
+        self.sessionRepository = AgentSessionRepository(database: database)
         self.query = AgentArticleQuery(database: database)
         self.digestPipeline = AgentDigestPipeline(database: database)
         self.digestCache = AgentDigestCache(database: database)
@@ -50,7 +53,7 @@ final class AgentPanelModel: ObservableObject {
         let actions = AgentActionRepository(database: database)
         let executor = AgentWriteExecutor(writer: store, actions: actions)
         self.controller = AgentSessionController(
-            repository: AgentSessionRepository(database: database),
+            repository: sessionRepository,
             llm: LLMService(),
             toolRegistry: AgentToolRegistry(database: database, writePermission: permission),
             writeExecutor: executor
@@ -91,6 +94,7 @@ final class AgentPanelModel: ObservableObject {
             }
             refreshScope()
             loadCachedDigest()
+            refreshSessions()
             return
         }
         _ = try? controller.startNewSession(
@@ -100,6 +104,43 @@ final class AgentPanelModel: ObservableObject {
         )
         refreshScope()
         loadCachedDigest()
+        refreshSessions()
+    }
+
+    func refreshSessions() {
+        sessions = (try? sessionRepository.fetchSessions(limit: 12)) ?? []
+    }
+
+    func newSession() {
+        guard let reference = store.aiSettings.configuration(for: .agent)?.model else { return }
+        _ = try? controller.startNewSession(
+            scopeJSON: scope.jsonString,
+            providerID: reference.providerID,
+            modelID: reference.modelID
+        )
+        digest = nil
+        digestError = nil
+        refreshSessions()
+    }
+
+    func loadSession(_ id: String) {
+        guard (try? controller.loadSession(id: id)) != nil else { return }
+        if let stored = controller.session,
+           let decoded = AgentScope.decode(jsonString: stored.scopeJSON) {
+            scope = decoded
+        }
+        digest = nil
+        digestError = nil
+        refreshScope()
+        loadCachedDigest()
+        refreshSessions()
+    }
+
+    func deleteCurrentSession() {
+        try? controller.deleteCurrentSession()
+        digest = nil
+        digestError = nil
+        newSession()
     }
 
     func refreshScope() {
@@ -414,6 +455,7 @@ struct AgentPanelView: View {
                 .foregroundStyle(PaperTheme.warmAccent)
             Text(I18N.shared.localized("AI 助手", "AI Assistant"))
                 .font(.system(size: 14, weight: .semibold))
+            sessionMenu
             Spacer(minLength: 6)
             Text(model.modelLabel)
                 .font(.system(size: 10))
@@ -431,6 +473,42 @@ struct AgentPanelView: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 48)
+    }
+
+    private var sessionMenu: some View {
+        Menu {
+            Button(I18N.shared.localized("新建对话", "New conversation")) {
+                model.newSession()
+            }
+            if !model.sessions.isEmpty {
+                Divider()
+                ForEach(model.sessions) { session in
+                    Button {
+                        model.loadSession(session.id)
+                    } label: {
+                        if session.id == model.controller.currentSessionID {
+                            Label(session.title.isEmpty ? I18N.shared.localized("未命名对话", "Untitled") : session.title, systemImage: "checkmark")
+                        } else {
+                            Text(session.title.isEmpty ? I18N.shared.localized("未命名对话", "Untitled") : session.title)
+                        }
+                    }
+                }
+            }
+            if model.controller.currentSessionID != nil {
+                Divider()
+                Button(I18N.shared.localized("删除当前对话", "Delete conversation"), role: .destructive) {
+                    model.deleteCurrentSession()
+                }
+            }
+        } label: {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help(I18N.shared.localized("会话记录", "Conversation history"))
+        .accessibilityLabel(I18N.shared.localized("会话记录", "Conversation history"))
     }
 
     private var scopeBar: some View {
