@@ -2054,6 +2054,18 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             guard visible != attached else { return }
             if visible {
                 splitVC.addSplitViewItem(agentItem)
+                // Adding a split item at runtime can start at zero width; give
+                // it a stable reading-friendly width once AppKit has laid out
+                // the fourth column.
+                DispatchQueue.main.async {
+                    guard splitVC.splitViewItems.contains(agentItem),
+                          splitVC.splitView.arrangedSubviews.count >= 4 else { return }
+                    let width = min(480, max(360, splitVC.splitView.bounds.width * 0.30))
+                    splitVC.splitView.setPosition(
+                        splitVC.splitView.bounds.width - width,
+                        ofDividerAt: splitVC.splitView.arrangedSubviews.count - 2
+                    )
+                }
             } else {
                 splitVC.removeSplitViewItem(agentItem)
             }
