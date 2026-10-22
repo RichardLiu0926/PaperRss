@@ -220,7 +220,7 @@ public final class AppStore: ObservableObject {
         switch kind {
         case .summary: return activeSummaryRequest
         case .bilingual: return activeBilingualRequest
-        case .translation, .selectionExplanation, .articleContext, .interpretation: return activeSelectionRequest
+        case .translation, .selectionExplanation, .articleContext, .interpretation, .triage: return activeSelectionRequest
         }
     }
 
@@ -3660,6 +3660,7 @@ public final class AppStore: ObservableObject {
         case .interpretation, .articleContext: feature = .selectionAsk
         case .summary: feature = .summary
         case .bilingual: feature = .bilingualTranslation
+        case .triage: feature = .agent
         }
         guard let (execution, apiKey) = executionSnapshot(for: feature) else { return nil }
         let configuration = execution.configuration

@@ -32,6 +32,7 @@ final class AgentPanelModel: ObservableObject {
 
     private let query: AgentArticleQuery
     private let digestPipeline: AgentDigestPipeline
+    private let digestCache: AgentDigestCache
     private let writePlanner: AgentWritePlanner
     private var didStart = false
     private var cancellables = Set<AnyCancellable>()
@@ -43,6 +44,7 @@ final class AgentPanelModel: ObservableObject {
         let database = store.libraryDatabase
         self.query = AgentArticleQuery(database: database)
         self.digestPipeline = AgentDigestPipeline(database: database)
+        self.digestCache = AgentDigestCache(database: database)
         self.writePlanner = AgentWritePlanner(database: database)
         let permission = store.aiSettings.features.agentWritePermission
         let actions = AgentActionRepository(database: database)
@@ -88,6 +90,7 @@ final class AgentPanelModel: ObservableObject {
                 scope = decoded
             }
             refreshScope()
+            loadCachedDigest()
             return
         }
         _ = try? controller.startNewSession(
@@ -96,6 +99,7 @@ final class AgentPanelModel: ObservableObject {
             modelID: store.aiSettings.configuration(for: .agent)?.model?.modelID
         )
         refreshScope()
+        loadCachedDigest()
     }
 
     func refreshScope() {
@@ -111,6 +115,9 @@ final class AgentPanelModel: ObservableObject {
     func applyScope(_ next: AgentScope) {
         scope = next
         refreshScope()
+        digest = nil
+        digestError = nil
+        loadCachedDigest()
         try? controller.updateScope(next.jsonString)
     }
 
@@ -139,12 +146,24 @@ final class AgentPanelModel: ObservableObject {
         return parts.joined(separator: " · ")
     }
 
-    func analyzeUnread() {
+    func analyzeUnread(force: Bool = false) {
         guard let configuration, !isDigesting else { return }
         let providerID = store.aiSettings.configuration(for: .agent)?.model?.providerID ?? ""
         let apiKey = store.apiKey(for: providerID)
         let scope = self.scope
         let accountID = store.activeAccountID
+        if !force,
+           let cached = try? digestCache.load(
+                scope: scope,
+                accountID: accountID,
+                configuration: configuration,
+                maximumArticles: 30,
+                deepReadLimit: 5
+           ) {
+            digest = cached
+            digestProgress = .finished
+            return
+        }
         digestTask?.cancel()
         isDigesting = true
         digestError = nil
@@ -167,6 +186,13 @@ final class AgentPanelModel: ObservableObject {
                 self.digest = result
                 self.isDigesting = false
                 self.digestProgress = .finished
+                try? self.digestCache.save(
+                    result,
+                    accountID: accountID,
+                    configuration: configuration,
+                    maximumArticles: 30,
+                    deepReadLimit: 5
+                )
             } catch is CancellationError {
                 self.isDigesting = false
                 self.digestProgress = nil
@@ -175,6 +201,20 @@ final class AgentPanelModel: ObservableObject {
                 self.digestProgress = nil
                 self.digestError = error.localizedDescription
             }
+        }
+    }
+
+    private func loadCachedDigest() {
+        guard let configuration else { return }
+        if let cached = try? digestCache.load(
+            scope: scope,
+            accountID: store.activeAccountID,
+            configuration: configuration,
+            maximumArticles: 30,
+            deepReadLimit: 5
+        ) {
+            digest = cached
+            digestProgress = .finished
         }
     }
 
@@ -488,7 +528,7 @@ struct AgentPanelView: View {
                             onOpen: onOpenEntry,
                             onMarkRead: { model.proposeRead(item: $0) },
                             onApplySkippable: { model.proposeSkippable() },
-                            onRefresh: { model.analyzeUnread() }
+                            onRefresh: { model.analyzeUnread(force: true) }
                         )
                     } else if model.isDigesting {
                         digestProgressCard

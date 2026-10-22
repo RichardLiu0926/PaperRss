@@ -419,6 +419,9 @@ public enum AIArtifactKind: String, Codable, CaseIterable, Sendable {
     /// article/model/language/prompt version and reused by selection questions.
     case articleContext
     case selectionExplanation
+    /// Cached unread-triage result stored as one global artifact keyed by the
+    /// selected scope and model. It is not attached to a single article.
+    case triage
     /// Kept only so databases created by older builds continue to decode.
     /// The whole-article interpretation feature is no longer exposed or run.
     case interpretation
@@ -430,6 +433,7 @@ public enum AIArtifactKind: String, Codable, CaseIterable, Sendable {
         case .summary: I18N.localized("AI 总结")
         case .articleContext: I18N.localized("文章上下文缓存")
         case .selectionExplanation: I18N.localized("选中文字解释")
+        case .triage: I18N.localized("未读分析结果")
         case .interpretation: I18N.localized("旧版 AI 解读")
         }
     }
