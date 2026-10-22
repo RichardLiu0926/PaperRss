@@ -38,6 +38,18 @@ public enum AgentTriageVerdict: String, Codable, CaseIterable, Hashable, Sendabl
     }
 }
 
+public struct AgentDuplicatePreview: Identifiable, Codable, Hashable, Sendable {
+    public let id: String
+    public let title: String
+    public let feedTitle: String
+
+    public init(id: String, title: String, feedTitle: String) {
+        self.id = id
+        self.title = title
+        self.feedTitle = feedTitle
+    }
+}
+
 public struct AgentDigestItem: Identifiable, Codable, Hashable, Sendable {
     public let id: String
     public let title: String
@@ -53,6 +65,7 @@ public struct AgentDigestItem: Identifiable, Codable, Hashable, Sendable {
     /// Other articles in the same story cluster. The digest keeps one item per
     /// cluster, so the UI can show "3 篇同题" without duplicating verdicts.
     public let duplicateIDs: [String]
+    public let duplicatePreviews: [AgentDuplicatePreview]
     public let clusterReason: String?
 
     public init(
@@ -68,6 +81,7 @@ public struct AgentDigestItem: Identifiable, Codable, Hashable, Sendable {
         isStarred: Bool,
         analysisFailed: Bool = false,
         duplicateIDs: [String] = [],
+        duplicatePreviews: [AgentDuplicatePreview] = [],
         clusterReason: String? = nil
     ) {
         self.id = id
@@ -82,6 +96,7 @@ public struct AgentDigestItem: Identifiable, Codable, Hashable, Sendable {
         self.isStarred = isStarred
         self.analysisFailed = analysisFailed
         self.duplicateIDs = duplicateIDs
+        self.duplicatePreviews = duplicatePreviews
         self.clusterReason = clusterReason
     }
 
@@ -151,6 +166,7 @@ public struct AgentDigest: Codable, Hashable, Sendable {
                 isStarred: item.isStarred,
                 analysisFailed: item.analysisFailed,
                 duplicateIDs: item.duplicateIDs,
+                duplicatePreviews: item.duplicatePreviews,
                 clusterReason: item.clusterReason
             )
         }

@@ -48,6 +48,9 @@ final class AgentDigestCacheTests: XCTestCase {
                     isRead: false,
                     isStarred: false,
                     duplicateIDs: ["i2"],
+                    duplicatePreviews: [
+                        AgentDuplicatePreview(id: "i2", title: "同题标题", feedTitle: "另一个源")
+                    ],
                     clusterReason: "同一链接"
                 )
             ]
@@ -89,6 +92,7 @@ final class AgentDigestCacheTests: XCTestCase {
         XCTAssertTrue(updated.items[0].isRead)
         XCTAssertEqual(updated.unreadCount, 0)
         XCTAssertEqual(updated.items[0].duplicateIDs, ["i2"])
+        XCTAssertEqual(updated.items[0].duplicatePreviews.map(\.title), ["同题标题"])
     }
 
     func testCacheKeepsOneRowPerKey() throws {

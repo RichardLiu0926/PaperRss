@@ -1243,6 +1243,7 @@ private struct AgentDigestCard: View {
     let onMarkRead: (AgentDigestItem) -> Void
     let onApplySkippable: () -> Void
     let onRefresh: () -> Void
+    @State private var expandedClusters: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -1314,12 +1315,26 @@ private struct AgentDigestCard: View {
                             .font(.system(size: 11, weight: .medium))
                             .lineLimit(2)
                         if item.clusterSize > 1 {
-                            Text(AgentL10n.format("同题 %lld", "%lld same story", [item.clusterSize]))
+                            Button {
+                                if expandedClusters.contains(item.id) {
+                                    expandedClusters.remove(item.id)
+                                } else {
+                                    expandedClusters.insert(item.id)
+                                }
+                            } label: {
+                                HStack(spacing: 2) {
+                                    Text(AgentL10n.format("同题 %lld", "%lld same story", [item.clusterSize]))
+                                    Image(systemName: expandedClusters.contains(item.id) ? "chevron.up" : "chevron.down")
+                                        .font(.system(size: 7))
+                                }
                                 .font(.system(size: 8))
                                 .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
                                 .background(Capsule().fill(PaperTheme.warmAccent.opacity(0.12)))
                                 .foregroundStyle(PaperTheme.warmAccent)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(I18N.shared.localized("展开同题文章", "Expand same-story articles"))
                         }
                         Spacer(minLength: 2)
                         Menu {
@@ -1342,6 +1357,26 @@ private struct AgentDigestCard: View {
                             .font(.system(size: 9))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if expandedClusters.contains(item.id), !item.duplicatePreviews.isEmpty {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(item.duplicatePreviews) { preview in
+                                HStack(spacing: 4) {
+                                    Image(systemName: "doc.text")
+                                        .font(.system(size: 8))
+                                        .foregroundStyle(.tertiary)
+                                    Text(preview.title)
+                                        .font(.system(size: 9))
+                                        .lineLimit(1)
+                                    Spacer(minLength: 4)
+                                    Text(preview.feedTitle)
+                                        .font(.system(size: 8))
+                                        .foregroundStyle(.tertiary)
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                        .padding(.leading, 8)
                     }
                 }
                 .padding(.vertical, 4)

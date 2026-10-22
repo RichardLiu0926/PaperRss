@@ -8,6 +8,7 @@ public final class AgentDigestPipeline: Sendable {
     private struct ScreeningUnit {
         let cluster: AgentArticleCluster
         let representative: AgentArticleSummary
+        let duplicates: [AgentArticleSummary]
     }
 
     private let query: AgentArticleQuery
@@ -112,6 +113,9 @@ public final class AgentDigestPipeline: Sendable {
                 isStarred: summary.isStarred,
                 analysisFailed: outcome.failed,
                 duplicateIDs: unit.cluster.duplicateIDs,
+                duplicatePreviews: unit.duplicates.map {
+                    AgentDuplicatePreview(id: $0.id, title: $0.title, feedTitle: $0.feedTitle)
+                },
                 clusterReason: unit.cluster.similarityReason
             )
         }
@@ -144,6 +148,7 @@ public final class AgentDigestPipeline: Sendable {
                         isStarred: old.isStarred,
                         analysisFailed: old.analysisFailed,
                         duplicateIDs: old.duplicateIDs,
+                        duplicatePreviews: old.duplicatePreviews,
                         clusterReason: old.clusterReason
                     )
                     deepReadCount += 1
@@ -186,7 +191,8 @@ public final class AgentDigestPipeline: Sendable {
         let summariesByID = Dictionary(uniqueKeysWithValues: summaries.map { ($0.id, $0) })
         return clusters.compactMap { cluster in
             guard let representative = summariesByID[cluster.representativeID] else { return nil }
-            return ScreeningUnit(cluster: cluster, representative: representative)
+            let duplicates = cluster.duplicateIDs.compactMap { summariesByID[$0] }
+            return ScreeningUnit(cluster: cluster, representative: representative, duplicates: duplicates)
         }
     }
 
