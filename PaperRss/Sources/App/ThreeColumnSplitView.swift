@@ -200,6 +200,8 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
     let sidebar: Sidebar
     let content: Content
     let detail: Detail
+    let agentPanel: AnyView
+    let showsAgentPanel: Bool
     let toolbarActions: ToolbarActions
     let appearance: ReaderAppearance
     let appearanceMode: ReaderAppearanceMode
@@ -261,6 +263,25 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         splitVC.addSplitViewItem(contentItem)
         splitVC.addSplitViewItem(detailItem)
 
+        // A real fourth column keeps the assistant beside the article instead
+        // of covering it. It is attached only while visible.
+        let agentHost = NSHostingController(rootView: agentPanel)
+        agentHost.view.wantsLayer = true
+        agentHost.view.clipsToBounds = true
+        agentHost.view.layer?.masksToBounds = true
+        let agentItem = NSSplitViewItem(viewController: agentHost)
+        agentItem.minimumThickness = 340
+        agentItem.maximumThickness = 560
+        agentItem.canCollapse = true
+        agentItem.preferredThicknessFraction = 0.30
+        agentItem.holdingPriority = .defaultLow
+        agentItem.allowsFullHeightLayout = true
+        context.coordinator.agentHost = agentHost
+        context.coordinator.agentItem = agentItem
+        if showsAgentPanel {
+            splitVC.addSplitViewItem(agentItem)
+        }
+
         context.coordinator.splitViewController = splitVC
         
         // 核心修复：使用 KVO 监听 NSSplitView 被挂载到 window 的那一瞬间。
@@ -312,6 +333,8 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         if let host = splitVC.splitViewItems[2].viewController as? NSHostingController<Detail> {
             host.rootView = detail
         }
+        context.coordinator.agentHost?.rootView = agentPanel
+        context.coordinator.setAgentPanelVisible(showsAgentPanel, in: splitVC)
 
         // Browse and read are distinct visual routes; all three controllers stay mounted.
         context.coordinator.syncTimelinePresentation()
@@ -420,6 +443,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         var windowObservation: NSKeyValueObservation?
         var sidebarObservation: NSKeyValueObservation?
         private weak var refreshItem: NSToolbarItem?
+        var agentHost: NSHostingController<AnyView>?
+        var agentItem: NSSplitViewItem?
         private weak var refreshButton: NSButton?
         private weak var refreshSpinner: NSProgressIndicator?
         fileprivate weak var timelineControlsHost: NSHostingView<AnyView>?
@@ -1167,7 +1192,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                   flags.intersection(disallowed).isEmpty,
                   ([UInt16(125), 126, 36, 49, 76].contains(event.keyCode)
                     || (actions.usesMagazineTimeline && [UInt16(53), 116, 121, 123, 124].contains(event.keyCode))),
-                  let splitVC = splitViewController, splitVC.splitViewItems.count == 3,
+                  let splitVC = splitViewController, splitVC.splitViewItems.count >= 3,
                   let window = splitVC.view.window, window.attachedSheet == nil,
                   NSApp.modalWindow == nil,
                   let responder = window.firstResponder as? NSView,
@@ -1179,7 +1204,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         }
 
         func syncTimelinePresentation() {
-            guard let splitVC = splitViewController, splitVC.splitViewItems.count == 3 else { return }
+            guard let splitVC = splitViewController, splitVC.splitViewItems.count >= 3 else { return }
             let sidebar = splitVC.splitViewItems[0]
             let content = splitVC.splitViewItems[1]
             let detail = splitVC.splitViewItems[2]
@@ -1255,7 +1280,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 }
                 return [.flexibleSpace, .paperReaderCapsule, .flexibleSpace]
             }
-            var result: [NSToolbarItem.Identifier] = [.toggleSidebar, .paperRefresh, .paperAddMenu, .paperAgent]
+            var result: [NSToolbarItem.Identifier] = [.toggleSidebar, .paperAgent, .paperRefresh, .paperAddMenu]
             if !sidebarCollapsed { result.append(.paperSidebarTracker) }
             if actions.usesMagazineTimeline {
                 if actions.isTimelineBrowsing {
@@ -2023,6 +2048,17 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             timelineBackButton?.isHidden = !actions.showsTimelineReturn
         }
 
+        func setAgentPanelVisible(_ visible: Bool, in splitVC: NSSplitViewController) {
+            guard let agentItem else { return }
+            let attached = splitVC.splitViewItems.contains(agentItem)
+            guard visible != attached else { return }
+            if visible {
+                splitVC.addSplitViewItem(agentItem)
+            } else {
+                splitVC.removeSplitViewItem(agentItem)
+            }
+        }
+
         // MARK: NSToolbarDelegate
 
         func toolbar(
@@ -2077,11 +2113,14 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 item.autovalidates = false
                 let button = NSButton()
                 button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: I18N.localized("AI 助手"))
+                button.title = I18N.localized("AI 助手")
+                button.imagePosition = .imageLeading
                 button.bezelStyle = .texturedRounded
                 button.isBordered = true
                 button.contentTintColor = chromeInkColor
                 button.target = self
                 button.action = #selector(doToggleAgent)
+                button.setAccessibilityLabel(I18N.localized("AI 助手"))
                 item.view = button
                 return item
 

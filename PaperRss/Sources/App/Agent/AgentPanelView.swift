@@ -277,6 +277,7 @@ final class AgentPanelModel: ObservableObject {
         let apiKey = store.apiKey(for: providerID)
         var tools = AgentToolRegistry.readOnlyDefinitions
         let permission = store.aiSettings.features.agentWritePermission
+        controller.updateWritePermission(permission)
         if permission.allowsMarkRead {
             tools += AgentToolRegistry.writeDefinitions(allowsStar: permission.allowsStar)
         }

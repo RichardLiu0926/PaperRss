@@ -55,12 +55,13 @@ public enum AgentToolError: LocalizedError, Equatable, Sendable {
 /// Executes the assistant's read-only tools. Scope authority stays with the UI:
 /// tools can narrow within the session scope but cannot widen it, and no tool
 /// here mutates read/starred state.
-public final class AgentToolRegistry: Sendable {
+public final class AgentToolRegistry: @unchecked Sendable {
     private let query: AgentArticleQuery
     private let articles: ArticleRepository
     private let cache: CacheRepository
     private let writePlanner: AgentWritePlanner?
-    private let writePermission: AgentWritePermission
+    private let permissionLock = NSLock()
+    private var permissionStorage: AgentWritePermission
 
     public init(
         database: LibraryDatabase,
@@ -71,7 +72,29 @@ public final class AgentToolRegistry: Sendable {
         self.articles = ArticleRepository(database: database)
         self.cache = CacheRepository(database: database)
         self.writePlanner = writePlanner ?? AgentWritePlanner(database: database)
-        self.writePermission = writePermission
+        self.permissionStorage = writePermission
+    }
+
+    /// The settings sheet closes the assistant, but a long-lived inspector can
+    /// still see a permission change; keep the gate mutable instead of
+    /// snapshotting it for the lifetime of the panel.
+    public func updateWritePermission(_ permission: AgentWritePermission) {
+        permissionLock.lock()
+        permissionStorage = permission
+        permissionLock.unlock()
+    }
+
+    private var writePermission: AgentWritePermission {
+        permissionLock.lock()
+        defer { permissionLock.unlock() }
+        return permissionStorage
+    }
+
+    public func isWritePermitted(_ kind: AgentWriteKind) -> Bool {
+        switch kind {
+        case .markRead: writePermission.allowsMarkRead
+        case .markStarred: writePermission.allowsStar
+        }
     }
 
     public static let readOnlyDefinitions: [AgentToolDefinition] = [

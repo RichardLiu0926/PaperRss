@@ -131,12 +131,24 @@ final class AgentWriteTests: XCTestCase {
             XCTAssertEqual(error, .writerUnavailable)
         }
 
-        let readOnly = AgentToolRegistry(database: database, writePermission: .markRead)
+        let readOnly = AgentToolRegistry(database: database, writePermission: .off)
+        readOnly.updateWritePermission(.markRead)
         let outcome = try await readOnly.execute(
             AgentToolCall(id: "c", name: "propose_mark_read", arguments: #"{"ids":["i1"]}"#),
             context: context
         )
         guard case .proposal = outcome else { return XCTFail("expected proposal") }
+
+        readOnly.updateWritePermission(.off)
+        do {
+            _ = try await readOnly.execute(
+                AgentToolCall(id: "c2", name: "propose_mark_read", arguments: #"{"ids":["i1"]}"#),
+                context: context
+            )
+            XCTFail("revoked permission should block")
+        } catch let error as AgentWriteError {
+            XCTAssertEqual(error, .writerUnavailable)
+        }
     }
 
     @MainActor

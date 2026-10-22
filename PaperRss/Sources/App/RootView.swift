@@ -500,6 +500,18 @@ struct RootView: View {
                 .ignoresSafeArea(),
             detail: detailContent
                 .ignoresSafeArea(),
+            agentPanel: AnyView(
+                AgentPanelView(
+                    store: store,
+                    onClose: { showsAgentPanel = false },
+                    onOpenEntry: { selectedEntryID = $0 },
+                    onOpenSettings: {
+                        showsAgentPanel = false
+                        showsSettings = true
+                    }
+                )
+            ),
+            showsAgentPanel: showsAgentPanel,
             toolbarActions: ToolbarActions(
                 onRefresh: { [store] in Task { await store.refresh() } },
                 onToggleAgent: { toggleAgentPanel() },
@@ -538,18 +550,6 @@ struct RootView: View {
             columnFocusState: columnFocusState
         )
         .ignoresSafeArea()
-        .inspector(isPresented: $showsAgentPanel) {
-            AgentPanelView(
-                store: store,
-                onClose: { showsAgentPanel = false },
-                onOpenEntry: { selectedEntryID = $0 },
-                onOpenSettings: {
-                    showsAgentPanel = false
-                    showsSettings = true
-                }
-            )
-            .inspectorColumnWidth(min: 340, ideal: 400, max: 520)
-        }
         .tint(appearanceAccentColor)
         .accentColor(appearanceAccentColor)
         #else

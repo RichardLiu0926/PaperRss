@@ -134,6 +134,10 @@ public final class AgentSessionController: ObservableObject {
         errorMessage = nil
     }
 
+    public func updateWritePermission(_ permission: AgentWritePermission) {
+        toolRegistry?.updateWritePermission(permission)
+    }
+
     public func updateScope(_ scopeJSON: String) throws {
         guard let session else { return }
         try repository.updateScope(id: session.id, scopeJSON: scopeJSON)
@@ -381,6 +385,9 @@ public final class AgentSessionController: ObservableObject {
 
     public func confirmPendingProposal(selectedIDs: Set<String>? = nil) throws {
         guard let proposal = pendingProposal, let writeExecutor else {
+            throw AgentWriteError.writerUnavailable
+        }
+        guard toolRegistry?.isWritePermitted(proposal.kind) == true else {
             throw AgentWriteError.writerUnavailable
         }
         let ids = selectedIDs ?? Set(proposal.items.map(\.id))
