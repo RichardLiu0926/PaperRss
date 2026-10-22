@@ -107,6 +107,17 @@ public final class AgentSessionRepository: Sendable {
         }
     }
 
+    public func updateScope(id: String, scopeJSON: String, now: Date = .now) throws {
+        try database.write { db in
+            guard var record = try AgentSessionRecord.fetchOne(db, key: id) else {
+                throw AgentSessionRepositoryError.sessionNotFound
+            }
+            record.scopeJSON = scopeJSON
+            record.updatedAt = now.timeIntervalSince1970
+            try record.update(db)
+        }
+    }
+
     public func renameSession(id: String, title: String, now: Date = .now) throws {
         let clean = title.trimmingCharacters(in: .whitespacesAndNewlines)
         try database.write { db in

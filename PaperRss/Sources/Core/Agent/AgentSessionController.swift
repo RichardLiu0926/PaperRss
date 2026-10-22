@@ -132,6 +132,18 @@ public final class AgentSessionController: ObservableObject {
         errorMessage = nil
     }
 
+    public func updateScope(_ scopeJSON: String) throws {
+        guard let session else { return }
+        try repository.updateScope(id: session.id, scopeJSON: scopeJSON)
+        self.session = try repository.fetchSession(id: session.id)
+    }
+
+    /// Lets the digest result card hand a validated proposal to the same
+    /// confirmation sheet the model uses.
+    public func presentProposal(_ proposal: AgentWriteProposal) {
+        pendingProposal = proposal
+    }
+
     /// The UI consumes a queued navigation action (for example open_article)
     /// once it has processed it.
     public func consumeUIAction() -> AgentUIAction? {

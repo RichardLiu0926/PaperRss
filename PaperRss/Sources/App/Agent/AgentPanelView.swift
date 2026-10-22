@@ -21,15 +21,29 @@ final class AgentPanelModel: ObservableObject {
     @Published var draft = ""
 
     @Published var actionError: String?
+    @Published private(set) var feedOptions: [AgentSourceOption] = []
+    @Published private(set) var folderOptions: [AgentSourceOption] = []
+    @Published private(set) var scopeCount = 0
+    @Published var scope: AgentScope = .allUnread
+    @Published private(set) var digest: AgentDigest?
+    @Published private(set) var digestProgress: AgentDigestProgress?
+    @Published private(set) var isDigesting = false
+    @Published var digestError: String?
 
-    private let scope = AgentScope.allUnread
+    private let query: AgentArticleQuery
+    private let digestPipeline: AgentDigestPipeline
+    private let writePlanner: AgentWritePlanner
     private var didStart = false
     private var cancellables = Set<AnyCancellable>()
     private var undoClearTask: Task<Void, Never>?
+    private var digestTask: Task<Void, Never>?
 
     init(store: AppStore) {
         self.store = store
         let database = store.libraryDatabase
+        self.query = AgentArticleQuery(database: database)
+        self.digestPipeline = AgentDigestPipeline(database: database)
+        self.writePlanner = AgentWritePlanner(database: database)
         let permission = store.aiSettings.features.agentWritePermission
         let actions = AgentActionRepository(database: database)
         let executor = AgentWriteExecutor(writer: store, actions: actions)
@@ -70,6 +84,10 @@ final class AgentPanelModel: ObservableObject {
         didStart = true
         if let latest = try? store.agentSessionRepository.fetchSessions(limit: 1).first,
            (try? controller.loadSession(id: latest.id)) != nil {
+            if let decoded = AgentScope.decode(jsonString: latest.scopeJSON) {
+                scope = decoded
+            }
+            refreshScope()
             return
         }
         _ = try? controller.startNewSession(
@@ -77,6 +95,136 @@ final class AgentPanelModel: ObservableObject {
             providerID: store.aiSettings.configuration(for: .agent)?.model?.providerID,
             modelID: store.aiSettings.configuration(for: .agent)?.model?.modelID
         )
+        refreshScope()
+    }
+
+    func refreshScope() {
+        scopeCount = (try? query.count(scope: scope, accountID: store.activeAccountID)) ?? 0
+        feedOptions = (try? query.feedOptions(accountID: store.activeAccountID)) ?? []
+        folderOptions = (try? query.folderOptions(accountID: store.activeAccountID)) ?? []
+    }
+
+    func applyScope(_ next: AgentScope) {
+        scope = next
+        refreshScope()
+        try? controller.updateScope(next.jsonString)
+    }
+
+    var scopeSummary: String {
+        var parts: [String] = []
+        switch scope.source {
+        case .all:
+            parts.append(I18N.shared.localized("全部源", "All feeds"))
+        case .feeds(let ids):
+            parts.append(I18N.localizedFormat("%lld 个源", arguments: [ids.count]))
+        case .folders(let refs):
+            parts.append(I18N.localizedFormat("%lld 个分组", arguments: [refs.count]))
+        }
+        if let from = scope.from {
+            let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: from), to: Calendar.current.startOfDay(for: .now)).day ?? 0
+            switch days {
+            case 0: parts.append(I18N.shared.localized("今天", "Today"))
+            case 1...3: parts.append(I18N.localizedFormat("近 %lld 天", arguments: [days + 1]))
+            case 4...7: parts.append(I18N.shared.localized("近 7 天", "Last 7 days"))
+            default:
+                let formatter = DateFormatter()
+                formatter.dateFormat = "MM/dd"
+                parts.append(formatter.string(from: from))
+            }
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    func analyzeUnread() {
+        guard let configuration, !isDigesting else { return }
+        let providerID = store.aiSettings.configuration(for: .agent)?.model?.providerID ?? ""
+        let apiKey = store.apiKey(for: providerID)
+        let scope = self.scope
+        let accountID = store.activeAccountID
+        digestTask?.cancel()
+        isDigesting = true
+        digestError = nil
+        digest = nil
+        digestProgress = .counting
+        digestTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.digestPipeline.run(
+                    scope: scope,
+                    accountID: accountID,
+                    configuration: configuration,
+                    apiKey: apiKey,
+                    maximumArticles: 30,
+                    deepReadLimit: 5,
+                    onProgress: { progress in
+                        await MainActor.run { self.digestProgress = progress }
+                    }
+                )
+                self.digest = result
+                self.isDigesting = false
+                self.digestProgress = .finished
+            } catch is CancellationError {
+                self.isDigesting = false
+                self.digestProgress = nil
+            } catch {
+                self.isDigesting = false
+                self.digestProgress = nil
+                self.digestError = error.localizedDescription
+            }
+        }
+    }
+
+    func cancelDigest() {
+        digestTask?.cancel()
+        digestTask = nil
+        isDigesting = false
+        digestProgress = nil
+    }
+
+    var digestProgressText: String {
+        switch digestProgress {
+        case .counting:
+            I18N.shared.localized("正在统计未读…", "Counting unread…")
+        case .analyzing(let completed, let total):
+            I18N.localizedFormat("正在分析 %lld / %lld…", arguments: [completed, total])
+        case .deepReading(let completed, let total):
+            I18N.localizedFormat("正在深读 %lld / %lld…", arguments: [completed, total])
+        case .finished, .none:
+            ""
+        }
+    }
+
+    func proposeRead(item: AgentDigestItem) {
+        proposeRead(ids: [item.id] + item.duplicateIDs, reason: item.reason)
+    }
+
+    func proposeSkippable() {
+        guard let digest else { return }
+        let ids = digest.items(for: .skippable).flatMap { [$0.id] + $0.duplicateIDs }
+        proposeRead(ids: ids, reason: I18N.shared.localized("可跳过", "Skippable"))
+    }
+
+    private func proposeRead(ids: [String], reason: String) {
+        guard store.aiSettings.features.agentWritePermission.allowsMarkRead else {
+            actionError = I18N.localized(
+                "请先在设置中开启助手写权限。",
+                englishFallback: "Enable assistant write permission in Settings first."
+            )
+            return
+        }
+        do {
+            let proposal = try writePlanner.propose(
+                kind: .markRead,
+                ids: ids,
+                desiredValue: true,
+                reason: reason,
+                accountID: store.activeAccountID
+            )
+            controller.presentProposal(proposal)
+            actionError = nil
+        } catch {
+            actionError = error.localizedDescription
+        }
     }
 
     func send() {
@@ -145,6 +293,7 @@ struct AgentPanelView: View {
     @StateObject private var model: AgentPanelModel
     @Environment(\.colorScheme) private var colorScheme
     @FocusState private var composerFocused: Bool
+    @State private var showsScopePicker = false
 
     let onClose: () -> Void
     let onOpenEntry: (String) -> Void
@@ -165,6 +314,7 @@ struct AgentPanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            scopeBar
             Divider().opacity(0.5)
             if let action = model.controller.lastExecutedAction {
                 undoBar(action)
@@ -235,6 +385,67 @@ struct AgentPanelView: View {
         .frame(height: 48)
     }
 
+    private var scopeBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                showsScopePicker.toggle()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                        .font(.system(size: 10))
+                    Text(model.scopeSummary)
+                        .font(.system(size: 10))
+                    Text("\(model.scopeCount)")
+                        .font(.system(size: 9, weight: .semibold))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showsScopePicker, arrowEdge: .bottom) {
+                AgentScopePickerView(
+                    current: model.scope,
+                    feeds: model.feedOptions,
+                    folders: model.folderOptions,
+                    count: model.scopeCount,
+                    onCancel: { showsScopePicker = false },
+                    onApply: { scope in
+                        model.applyScope(scope)
+                        showsScopePicker = false
+                    }
+                )
+            }
+
+            Spacer(minLength: 4)
+
+            if model.isDigesting {
+                ProgressView()
+                    .controlSize(.small)
+                Text(model.digestProgressText)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Button(I18N.shared.localized("停止", "Stop")) {
+                    model.cancelDigest()
+                }
+                .buttonStyle(.borderless)
+                .font(.system(size: 10))
+            } else if model.configuration != nil && model.scopeCount > 0 {
+                Button {
+                    model.analyzeUnread()
+                } label: {
+                    Label(I18N.shared.localized("分析未读", "Triage"), systemImage: "sparkles")
+                        .font(.system(size: 10, weight: .medium))
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
     private var proposalPresented: Binding<Bool> {
         Binding(
             get: { model.controller.pendingProposal != nil },
@@ -266,7 +477,21 @@ struct AgentPanelView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    if model.controller.messages.isEmpty && model.controller.streamingText.isEmpty {
+                    if let digest = model.digest {
+                        AgentDigestCard(
+                            digest: digest,
+                            onOpen: onOpenEntry,
+                            onMarkRead: { model.proposeRead(item: $0) },
+                            onApplySkippable: { model.proposeSkippable() },
+                            onRefresh: { model.analyzeUnread() }
+                        )
+                    } else if model.isDigesting {
+                        digestProgressCard
+                    }
+                    if let digestError = model.digestError {
+                        errorBanner(digestError)
+                    }
+                    if model.controller.messages.isEmpty && model.controller.streamingText.isEmpty && model.digest == nil && !model.isDigesting {
                         welcome
                     }
                     ForEach(model.controller.messages) { message in
@@ -292,6 +517,26 @@ struct AgentPanelView: View {
             }
             .onAppear { scrollToBottom(proxy: proxy) }
         }
+    }
+
+    private var digestProgressCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.small)
+                Text(model.digestProgressText)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            Text(I18N.shared.localized(
+                "先按标题和摘要快筛，再对最值得读的文章做深读。已完成的条目会先显示。",
+                "Screens titles and summaries first, then deep-reads the best articles. Finished items appear as they complete."
+            ))
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.06)))
     }
 
     private var welcome: some View {
@@ -613,5 +858,333 @@ private struct AgentWriteConfirmationView: View {
 
     private var confirmTitle: String {
         I18N.localizedFormat("确认处理 %lld 篇", arguments: [selected.count])
+    }
+}
+
+private struct AgentScopePickerView: View {
+    enum Mode: String, CaseIterable, Identifiable {
+        case all
+        case feeds
+        case folders
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .all: I18N.localized("全部", englishFallback: "All")
+            case .feeds: I18N.localized("订阅源", englishFallback: "Feeds")
+            case .folders: I18N.localized("订阅源组", englishFallback: "Groups")
+            }
+        }
+    }
+
+    enum TimePreset: String, CaseIterable, Identifiable {
+        case all
+        case today
+        case threeDays
+        case sevenDays
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .all: I18N.localized("全部时间", englishFallback: "Any time")
+            case .today: I18N.localized("今天", englishFallback: "Today")
+            case .threeDays: I18N.localized("近 3 天", englishFallback: "3 days")
+            case .sevenDays: I18N.localized("近 7 天", englishFallback: "7 days")
+            }
+        }
+    }
+
+    let feeds: [AgentSourceOption]
+    let folders: [AgentSourceOption]
+    let count: Int
+    let onCancel: () -> Void
+    let onApply: (AgentScope) -> Void
+
+    @State private var mode: Mode
+    @State private var timePreset: TimePreset
+    @State private var selectedFeeds: Set<String>
+    @State private var selectedFolders: Set<String>
+
+    init(
+        current: AgentScope,
+        feeds: [AgentSourceOption],
+        folders: [AgentSourceOption],
+        count: Int,
+        onCancel: @escaping () -> Void,
+        onApply: @escaping (AgentScope) -> Void
+    ) {
+        self.feeds = feeds
+        self.folders = folders
+        self.count = count
+        self.onCancel = onCancel
+        self.onApply = onApply
+        switch current.source {
+        case .all:
+            _mode = State(initialValue: .all)
+            _selectedFeeds = State(initialValue: [])
+            _selectedFolders = State(initialValue: [])
+        case .feeds(let ids):
+            _mode = State(initialValue: .feeds)
+            _selectedFeeds = State(initialValue: Set(ids))
+            _selectedFolders = State(initialValue: [])
+        case .folders(let refs):
+            _mode = State(initialValue: .folders)
+            _selectedFeeds = State(initialValue: [])
+            _selectedFolders = State(initialValue: Set(refs.map(\.id)))
+        }
+        if let from = current.from {
+            let start = Calendar.current.startOfDay(for: from)
+            let days = Calendar.current.dateComponents([.day], from: start, to: Calendar.current.startOfDay(for: .now)).day ?? 0
+            _timePreset = State(initialValue: days <= 0 ? .today : (days <= 2 ? .threeDays : .sevenDays))
+        } else {
+            _timePreset = State(initialValue: .all)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(I18N.shared.localized("分析范围", "Analysis scope"))
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Button(action: onCancel) {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Picker("", selection: $mode) {
+                ForEach(Mode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            if mode == .all {
+                Text(I18N.shared.localized("所有订阅源。也可以在下方按源或分组缩小范围。", "All feeds. Narrow by feeds or groups below."))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        if mode == .feeds {
+                            ForEach(feeds) { feed in
+                                choiceRow(
+                                    title: feed.title,
+                                    subtitle: I18N.localizedFormat("%lld 篇未读", arguments: [feed.unreadCount]),
+                                    selected: selectedFeeds.contains(feed.id)
+                                ) {
+                                    toggle(feed.id, in: &selectedFeeds)
+                                }
+                            }
+                        } else {
+                            ForEach(folders) { folder in
+                                choiceRow(
+                                    title: folder.title,
+                                    subtitle: I18N.localizedFormat("%lld 篇未读", arguments: [folder.unreadCount]),
+                                    selected: selectedFolders.contains(folder.id)
+                                ) {
+                                    toggle(folder.id, in: &selectedFolders)
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 190)
+                .background(RoundedRectangle(cornerRadius: 7).strokeBorder(.quaternary))
+            }
+
+            Picker(I18N.shared.localized("时间", "Time"), selection: $timePreset) {
+                ForEach(TimePreset.allCases) { preset in
+                    Text(preset.title).tag(preset)
+                }
+            }
+            .pickerStyle(.menu)
+
+            Text(I18N.localizedFormat("当前范围 %lld 篇未读", arguments: [count]))
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Button(I18N.shared.localized("取消", "Cancel"), action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button(I18N.shared.localized("应用", "Apply")) {
+                    onApply(buildScope())
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(invalidSelection)
+            }
+        }
+        .padding(14)
+        .frame(width: 340)
+    }
+
+    private var invalidSelection: Bool {
+        switch mode {
+        case .all: false
+        case .feeds: selectedFeeds.isEmpty
+        case .folders: selectedFolders.isEmpty
+        }
+    }
+
+    private func choiceRow(title: String, subtitle: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: selected ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 12))
+                    .foregroundStyle(selected ? PaperTheme.warmAccent : .secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.system(size: 11)).lineLimit(1)
+                    Text(subtitle).font(.system(size: 9)).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func toggle(_ id: String, in set: inout Set<String>) {
+        if set.contains(id) { set.remove(id) } else { set.insert(id) }
+    }
+
+    private func buildScope() -> AgentScope {
+        let source: AgentSourceScope
+        switch mode {
+        case .all:
+            source = .all
+        case .feeds:
+            source = .feeds(selectedFeeds.sorted())
+        case .folders:
+            let refs = folders
+                .filter { selectedFolders.contains($0.id) }
+                .map { AgentFolderRef(id: $0.id, accountID: $0.accountID, name: $0.folderName ?? $0.title) }
+            source = .folders(refs)
+        }
+        let startOfToday = Calendar.current.startOfDay(for: .now)
+        let from: Date?
+        switch timePreset {
+        case .all: from = nil
+        case .today: from = startOfToday
+        case .threeDays: from = Calendar.current.date(byAdding: .day, value: -2, to: startOfToday)
+        case .sevenDays: from = Calendar.current.date(byAdding: .day, value: -6, to: startOfToday)
+        }
+        return AgentScope(source: source, from: from, unreadOnly: true)
+    }
+}
+
+private struct AgentDigestCard: View {
+    let digest: AgentDigest
+    let onOpen: (String) -> Void
+    let onMarkRead: (AgentDigestItem) -> Void
+    let onApplySkippable: () -> Void
+    let onRefresh: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(I18N.shared.localized("未读分析", "Unread triage"))
+                    .font(.system(size: 13, weight: .semibold))
+                Text(I18N.localizedFormat("%lld 篇 → %lld 个主题", arguments: [digest.unreadCount, digest.items.count]))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: onRefresh) {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 10))
+                }
+                .buttonStyle(.plain)
+                .help(I18N.shared.localized("重新分析", "Analyze again"))
+            }
+
+            group(.worthReading, color: PaperTheme.accent)
+            group(.later, color: .orange)
+            group(.skippable, color: .secondary)
+
+            let skippable = digest.items(for: .skippable)
+            if !skippable.isEmpty {
+                Button {
+                    onApplySkippable()
+                } label: {
+                    HStack {
+                        Text(I18N.localizedFormat("把可跳过的 %lld 篇标已读", arguments: [skippable.count]))
+                        Spacer()
+                        Image(systemName: "checkmark.circle")
+                    }
+                    .font(.system(size: 10, weight: .medium))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(PaperTheme.warmAccent.opacity(0.1)))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text(I18N.shared.localized(
+                "分析只给建议；标记已读前会再次确认。",
+                "Triage only suggests. Read state changes only after confirmation."
+            ))
+            .font(.system(size: 9))
+            .foregroundStyle(.tertiary)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.secondary.opacity(0.05)))
+    }
+
+    @ViewBuilder
+    private func group(_ verdict: AgentTriageVerdict, color: Color) -> some View {
+        let items = digest.items(for: verdict)
+        if !items.isEmpty {
+            HStack(spacing: 5) {
+                Circle().fill(color).frame(width: 5, height: 5)
+                Text(verdict == .worthReading
+                     ? I18N.shared.localized("值得读", "Worth reading")
+                     : verdict == .later
+                        ? I18N.shared.localized("稍后读", "Later")
+                        : I18N.shared.localized("可跳过", "Skippable"))
+                    .font(.system(size: 10, weight: .semibold))
+                Text("\(items.count)").font(.system(size: 9)).foregroundStyle(.secondary)
+            }
+            ForEach(items) { item in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .top, spacing: 5) {
+                        Text(item.title)
+                            .font(.system(size: 11, weight: .medium))
+                            .lineLimit(2)
+                        if item.clusterSize > 1 {
+                            Text(I18N.localizedFormat("同题 %lld", arguments: [item.clusterSize]))
+                                .font(.system(size: 8))
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(Capsule().fill(PaperTheme.warmAccent.opacity(0.12)))
+                                .foregroundStyle(PaperTheme.warmAccent)
+                        }
+                        Spacer(minLength: 2)
+                        Menu {
+                            Button(I18N.shared.localized("打开", "Open")) { onOpen(item.id) }
+                            Button(I18N.shared.localized("标记已读", "Mark read")) { onMarkRead(item) }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                    }
+                    Text("\(item.feedTitle) · \(item.reason)")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    ForEach(item.bullets, id: \.self) { bullet in
+                        Text("• \(bullet)")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.vertical, 4)
+                Divider().opacity(0.2)
+            }
+        }
     }
 }
