@@ -476,6 +476,16 @@ struct AgentPanelView: View {
             Text(I18N.shared.localized("AI 助手", "AI Assistant"))
                 .font(.system(size: 14, weight: .semibold))
             sessionMenu
+            Button {
+                model.newSession()
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(I18N.shared.localized("新建对话", "New conversation"))
+            .accessibilityLabel(I18N.shared.localized("新建对话", "New conversation"))
             Spacer(minLength: 6)
             Text(model.modelLabel)
                 .font(.system(size: 10))
