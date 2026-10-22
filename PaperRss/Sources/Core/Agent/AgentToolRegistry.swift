@@ -29,6 +29,7 @@ public struct AgentUIAction: Equatable, Sendable {
 public enum AgentToolOutcome: Equatable, Sendable {
     case result(json: String)
     case action(AgentUIAction)
+    case proposal(AgentWriteProposal)
 }
 
 public enum AgentToolError: LocalizedError, Equatable, Sendable {
@@ -58,11 +59,19 @@ public final class AgentToolRegistry: Sendable {
     private let query: AgentArticleQuery
     private let articles: ArticleRepository
     private let cache: CacheRepository
+    private let writePlanner: AgentWritePlanner?
+    private let writePermission: AgentWritePermission
 
-    public init(database: LibraryDatabase) {
+    public init(
+        database: LibraryDatabase,
+        writePlanner: AgentWritePlanner? = nil,
+        writePermission: AgentWritePermission = .off
+    ) {
         self.query = AgentArticleQuery(database: database)
         self.articles = ArticleRepository(database: database)
         self.cache = CacheRepository(database: database)
+        self.writePlanner = writePlanner ?? AgentWritePlanner(database: database)
+        self.writePermission = writePermission
     }
 
     public static let readOnlyDefinitions: [AgentToolDefinition] = [
@@ -109,6 +118,34 @@ public final class AgentToolRegistry: Sendable {
         )
     ]
 
+    /// Write tools are only offered when the user enabled the matching
+    /// permission. Execution still requires a UI confirmation.
+    public static func writeDefinitions(allowsStar: Bool) -> [AgentToolDefinition] {
+        var definitions = [
+            AgentToolDefinition(
+                name: "propose_mark_read",
+                description: "Propose marking articles read. This only creates a confirmation card; it does not change state.",
+                parameters: [
+                    AgentToolParameter(name: "ids", kind: .stringArray, description: "Article ids to mark read.", isRequired: true, itemType: "string"),
+                    AgentToolParameter(name: "value", kind: .boolean, description: "true to mark read, false to mark unread. Defaults to true."),
+                    AgentToolParameter(name: "reason", kind: .string, description: "Short reason shown in the confirmation card.")
+                ]
+            )
+        ]
+        if allowsStar {
+            definitions.append(AgentToolDefinition(
+                name: "propose_mark_starred",
+                description: "Propose starring articles. This only creates a confirmation card; it does not change state.",
+                parameters: [
+                    AgentToolParameter(name: "ids", kind: .stringArray, description: "Article ids to star or unstar.", isRequired: true, itemType: "string"),
+                    AgentToolParameter(name: "value", kind: .boolean, description: "true to star, false to unstar. Defaults to true."),
+                    AgentToolParameter(name: "reason", kind: .string, description: "Short reason shown in the confirmation card.")
+                ]
+            ))
+        }
+        return definitions
+    }
+
     public func execute(_ call: AgentToolCall, context: AgentToolContext) async throws -> AgentToolOutcome {
         let arguments: AgentToolArguments
         do {
@@ -129,6 +166,10 @@ public final class AgentToolRegistry: Sendable {
             return try feeds(context: context)
         case "open_article":
             return try openArticle(arguments, context: context)
+        case "propose_mark_read":
+            return try proposeWrite(.markRead, arguments: arguments, context: context)
+        case "propose_mark_starred":
+            return try proposeWrite(.markStarred, arguments: arguments, context: context)
         default:
             throw AgentToolError.unknownTool(call.name)
         }
@@ -210,6 +251,30 @@ public final class AgentToolRegistry: Sendable {
             throw AgentToolError.articleNotFound(id)
         }
         return .action(AgentUIAction(kind: .openArticle, entryID: id))
+    }
+
+    private func proposeWrite(
+        _ kind: AgentWriteKind,
+        arguments: AgentToolArguments,
+        context: AgentToolContext
+    ) throws -> AgentToolOutcome {
+        guard let writePlanner, writePermission.allowsMarkRead else {
+            throw AgentWriteError.writerUnavailable
+        }
+        if kind == .markStarred, !writePermission.allowsStar {
+            throw AgentWriteError.writerUnavailable
+        }
+        let ids = try arguments.stringArray("ids")
+        let value = try arguments.bool("value", default: true)
+        let reason = (try? arguments.optionalString("reason")) ?? ""
+        let proposal = try writePlanner.propose(
+            kind: kind,
+            ids: ids,
+            desiredValue: value,
+            reason: reason,
+            accountID: context.accountID
+        )
+        return .proposal(proposal)
     }
 
     // MARK: - Encoding
@@ -296,6 +361,28 @@ private struct AgentToolArguments {
             throw AgentToolError.invalidArguments("missing string '\(key)'")
         }
         return value
+    }
+
+    func optionalString(_ key: String) throws -> String? {
+        values[key] as? String
+    }
+
+    func stringArray(_ key: String) throws -> [String] {
+        guard let raw = values[key] as? [Any] else {
+            throw AgentToolError.invalidArguments("missing string array '\(key)'")
+        }
+        let strings = raw.compactMap { $0 as? String }.filter { !$0.isEmpty }
+        guard !strings.isEmpty else {
+            throw AgentToolError.invalidArguments("'\(key)' must not be empty")
+        }
+        return strings
+    }
+
+    func bool(_ key: String, default defaultValue: Bool) throws -> Bool {
+        guard let raw = values[key] else { return defaultValue }
+        if let value = raw as? Bool { return value }
+        if let number = raw as? NSNumber { return number.boolValue }
+        throw AgentToolError.invalidArguments("'\(key)' must be a boolean")
     }
 
     func int(_ key: String, default defaultValue: Int, range: ClosedRange<Int>) throws -> Int {

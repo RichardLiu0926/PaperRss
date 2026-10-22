@@ -19,20 +19,25 @@ public final class AgentSessionController: ObservableObject {
     """
 
     @Published public private(set) var pendingUIAction: AgentUIAction?
+    @Published public private(set) var pendingProposal: AgentWriteProposal?
+    @Published public private(set) var lastExecutedAction: AgentAction?
 
     private let repository: AgentSessionRepository
     private let llm: LLMService
     private let toolRegistry: AgentToolRegistry?
+    private let writeExecutor: AgentWriteExecutor?
     private var activeTask: Task<Void, Never>?
 
     public init(
         repository: AgentSessionRepository,
         llm: LLMService = LLMService(),
-        toolRegistry: AgentToolRegistry? = nil
+        toolRegistry: AgentToolRegistry? = nil,
+        writeExecutor: AgentWriteExecutor? = nil
     ) {
         self.repository = repository
         self.llm = llm
         self.toolRegistry = toolRegistry
+        self.writeExecutor = writeExecutor
     }
 
     public var currentSessionID: String? { session?.id }
@@ -53,6 +58,7 @@ public final class AgentSessionController: ObservableObject {
         messages = []
         streamingText = ""
         errorMessage = nil
+        pendingProposal = nil
         return created
     }
 
@@ -65,6 +71,7 @@ public final class AgentSessionController: ObservableObject {
         messages = try repository.fetchMessages(sessionID: id)
         streamingText = ""
         errorMessage = nil
+        pendingProposal = nil
     }
 
     /// Persists the user turn immediately, then streams the reply in a detached
@@ -203,15 +210,33 @@ public final class AgentSessionController: ObservableObject {
 
                 for call in completion.toolCalls {
                     try Task.checkCancellation()
-                    let content = await executeTool(call, context: toolContext)
-                    let toolMessage = try repository.appendMessage(
-                        sessionID: sessionID,
-                        role: .tool,
-                        content: content,
-                        toolCallID: call.id
-                    )
-                    messages.append(toolMessage)
-                    working.append(toolMessage.chatMessage)
+                    let result = await executeTool(call, context: toolContext)
+                    switch result {
+                    case .text(let content):
+                        let toolMessage = try repository.appendMessage(
+                            sessionID: sessionID,
+                            role: .tool,
+                            content: content,
+                            toolCallID: call.id
+                        )
+                        messages.append(toolMessage)
+                        working.append(toolMessage.chatMessage)
+                    case .proposal(let proposal):
+                        pendingProposal = proposal
+                        let payload = #"{"status":"pending_confirmation","count":\#(proposal.count),"kind":"\#(proposal.kind.rawValue)"}"#
+                        let toolMessage = try repository.appendMessage(
+                            sessionID: sessionID,
+                            role: .tool,
+                            content: payload,
+                            toolCallID: call.id
+                        )
+                        messages.append(toolMessage)
+                        refreshSession(sessionID)
+                        // Wait for the user; do not let the model continue as if
+                        // the proposal had already been executed.
+                        streamingText = ""
+                        return
+                    }
                 }
                 refreshSession(sessionID)
             }
@@ -237,15 +262,20 @@ public final class AgentSessionController: ObservableObject {
         }
     }
 
-    private func executeTool(_ call: AgentToolCall, context: AgentToolContext?) async -> String {
+    private enum ToolExecutionResult {
+        case text(String)
+        case proposal(AgentWriteProposal)
+    }
+
+    private func executeTool(_ call: AgentToolCall, context: AgentToolContext?) async -> ToolExecutionResult {
         guard let toolRegistry, let context else {
-            return Self.errorJSON("Tools are not enabled for this conversation.")
+            return .text(Self.errorJSON("Tools are not enabled for this conversation."))
         }
         do {
             let outcome = try await toolRegistry.execute(call, context: context)
             switch outcome {
             case .result(let json):
-                return json
+                return .text(json)
             case .action(let action):
                 pendingUIAction = action
                 let payload: [String: String] = [
@@ -254,13 +284,64 @@ public final class AgentSessionController: ObservableObject {
                 ]
                 guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
                       let json = String(data: data, encoding: .utf8) else {
-                    return "{\"action\":\"openArticle\"}"
+                    return .text("{\"action\":\"openArticle\"}")
                 }
-                return json
+                return .text(json)
+            case .proposal(let proposal):
+                return .proposal(proposal)
             }
         } catch {
-            return Self.errorJSON(error.localizedDescription)
+            return .text(Self.errorJSON(error.localizedDescription))
         }
+    }
+
+    public func confirmPendingProposal(selectedIDs: Set<String>? = nil) throws {
+        guard let proposal = pendingProposal, let writeExecutor else {
+            throw AgentWriteError.writerUnavailable
+        }
+        let ids = selectedIDs ?? Set(proposal.items.map(\.id))
+        let action = try writeExecutor.execute(
+            proposal: proposal,
+            selectedIDs: ids,
+            sessionID: session?.id,
+            messageID: messages.last?.id
+        )
+        pendingProposal = nil
+        lastExecutedAction = action
+        let content = I18N.localizedFormat(
+            "已处理 %lld 篇文章，可在 10 秒内撤销。",
+            arguments: [action.affectedIDs.count]
+        )
+        let message = try repository.appendMessage(
+            sessionID: session?.id ?? "",
+            role: .assistant,
+            content: content
+        )
+        messages.append(message)
+        refreshSession(message.sessionID)
+    }
+
+    public func rejectPendingProposal() {
+        pendingProposal = nil
+    }
+
+    public func undoLastAction() throws {
+        guard let action = lastExecutedAction, let writeExecutor else { return }
+        try writeExecutor.undo(action: action)
+        lastExecutedAction = nil
+        if let sessionID = session?.id {
+            let message = try repository.appendMessage(
+                sessionID: sessionID,
+                role: .assistant,
+                content: I18N.localized("已撤销上一次标记。", englishFallback: "The last change was undone.")
+            )
+            messages.append(message)
+            refreshSession(sessionID)
+        }
+    }
+
+    public func clearLastAction() {
+        lastExecutedAction = nil
     }
 
     private func refreshSession(_ sessionID: String) {

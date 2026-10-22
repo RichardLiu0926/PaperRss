@@ -4,23 +4,40 @@ import Combine
 import PaperRssCore
 #endif
 
+extension AppStore: AgentStateWriting {
+    public func applyReadState(entryIDs: [String], read: Bool) {
+        markRead(entryIDs: entryIDs, read: read)
+    }
+
+    public func applyStarredState(entryIDs: [String], starred: Bool) {
+        markStarred(entryIDs: entryIDs, starred: starred)
+    }
+}
+
 @MainActor
 final class AgentPanelModel: ObservableObject {
     let store: AppStore
     let controller: AgentSessionController
     @Published var draft = ""
 
+    @Published var actionError: String?
+
     private let scope = AgentScope.allUnread
     private var didStart = false
     private var cancellables = Set<AnyCancellable>()
+    private var undoClearTask: Task<Void, Never>?
 
     init(store: AppStore) {
         self.store = store
         let database = store.libraryDatabase
+        let permission = store.aiSettings.features.agentWritePermission
+        let actions = AgentActionRepository(database: database)
+        let executor = AgentWriteExecutor(writer: store, actions: actions)
         self.controller = AgentSessionController(
             repository: AgentSessionRepository(database: database),
             llm: LLMService(),
-            toolRegistry: AgentToolRegistry(database: database)
+            toolRegistry: AgentToolRegistry(database: database, writePermission: permission),
+            writeExecutor: executor
         )
         // SwiftUI observes the model, not the nested controller; forward
         // controller changes so streaming text and messages update the panel.
@@ -66,10 +83,16 @@ final class AgentPanelModel: ObservableObject {
         guard canSend, let configuration else { return }
         let providerID = store.aiSettings.configuration(for: .agent)?.model?.providerID ?? ""
         let apiKey = store.apiKey(for: providerID)
+        var tools = AgentToolRegistry.readOnlyDefinitions
+        let permission = store.aiSettings.features.agentWritePermission
+        if permission.allowsMarkRead {
+            tools += AgentToolRegistry.writeDefinitions(allowsStar: permission.allowsStar)
+        }
         controller.send(
             draft,
             configuration: configuration,
             apiKey: apiKey,
+            tools: tools,
             toolContext: AgentToolContext(
                 accountID: store.activeAccountID,
                 scope: scope,
@@ -79,8 +102,42 @@ final class AgentPanelModel: ObservableObject {
         draft = ""
     }
 
+    func confirmPendingProposal(selectedIDs: Set<String>) {
+        do {
+            try controller.confirmPendingProposal(selectedIDs: selectedIDs)
+            actionError = nil
+            scheduleUndoClear()
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    func rejectPendingProposal() {
+        controller.rejectPendingProposal()
+    }
+
+    func undoLastAction() {
+        do {
+            try controller.undoLastAction()
+            undoClearTask?.cancel()
+            actionError = nil
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
     func stop() {
         controller.cancel()
+    }
+
+    private func scheduleUndoClear() {
+        undoClearTask?.cancel()
+        guard let actionID = controller.lastExecutedAction?.id else { return }
+        undoClearTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            guard !Task.isCancelled, self?.controller.lastExecutedAction?.id == actionID else { return }
+            self?.controller.clearLastAction()
+        }
     }
 }
 
@@ -109,10 +166,18 @@ struct AgentPanelView: View {
         VStack(spacing: 0) {
             header
             Divider().opacity(0.5)
+            if let action = model.controller.lastExecutedAction {
+                undoBar(action)
+            }
             if model.configuration == nil {
                 setupState
             } else {
                 transcript
+                if let actionError = model.actionError {
+                    errorBanner(actionError)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 6)
+                }
                 Divider().opacity(0.5)
                 composer
             }
@@ -129,6 +194,20 @@ struct AgentPanelView: View {
                 onOpenEntry(action.entryID)
             }
             _ = model.controller.consumeUIAction()
+        }
+        .sheet(isPresented: proposalPresented) {
+            if let proposal = model.controller.pendingProposal {
+                AgentWriteConfirmationView(
+                    proposal: proposal,
+                    errorMessage: model.actionError,
+                    onCancel: {
+                        model.rejectPendingProposal()
+                    },
+                    onConfirm: { selected in
+                        model.confirmPendingProposal(selectedIDs: selected)
+                    }
+                )
+            }
         }
     }
 
@@ -154,6 +233,33 @@ struct AgentPanelView: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 48)
+    }
+
+    private var proposalPresented: Binding<Bool> {
+        Binding(
+            get: { model.controller.pendingProposal != nil },
+            set: { isPresented in
+                if !isPresented { model.rejectPendingProposal() }
+            }
+        )
+    }
+
+    private func undoBar(_ action: AgentAction) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(PaperTheme.accent)
+            Text(I18N.localizedFormat("已处理 %lld 篇", arguments: [action.affectedIDs.count]))
+                .font(.system(size: 11))
+            Spacer()
+            Button(I18N.shared.localized("撤销", "Undo")) {
+                model.undoLastAction()
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 11, weight: .semibold))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(PaperTheme.accent.opacity(0.08))
     }
 
     private var transcript: some View {
@@ -388,5 +494,124 @@ struct AgentPanelView: View {
         withAnimation(.easeOut(duration: 0.15)) {
             proxy.scrollTo("agent-bottom", anchor: .bottom)
         }
+    }
+}
+
+
+private struct AgentWriteConfirmationView: View {
+    let proposal: AgentWriteProposal
+    let errorMessage: String?
+    let onCancel: () -> Void
+    let onConfirm: (Set<String>) -> Void
+
+    @State private var selected: Set<String>
+
+    init(
+        proposal: AgentWriteProposal,
+        errorMessage: String?,
+        onCancel: @escaping () -> Void,
+        onConfirm: @escaping (Set<String>) -> Void
+    ) {
+        self.proposal = proposal
+        self.errorMessage = errorMessage
+        self.onCancel = onCancel
+        self.onConfirm = onConfirm
+        _selected = State(initialValue: Set(proposal.items.map(\.id)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                Spacer()
+                Text("\(selected.count) / \(proposal.items.count)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            Text(I18N.shared.localized(
+                "只影响以下文章；执行后可在面板顶部撤销。",
+                "Only the articles below are affected. You can undo from the panel header."
+            ))
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+
+            if !proposal.reason.isEmpty {
+                Text(proposal.reason)
+                    .font(.system(size: 11))
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Color.secondary.opacity(0.08)))
+            }
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(proposal.items) { item in
+                        HStack(spacing: 9) {
+                            Button {
+                                if selected.contains(item.id) {
+                                    selected.remove(item.id)
+                                } else {
+                                    selected.insert(item.id)
+                                }
+                            } label: {
+                                Image(systemName: selected.contains(item.id) ? "checkmark.square.fill" : "square")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(selected.contains(item.id) ? PaperTheme.warmAccent : .secondary)
+                            }
+                            .buttonStyle(.plain)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title)
+                                    .font(.system(size: 12))
+                                    .lineLimit(2)
+                                Text(item.feedTitle)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .padding(.vertical, 7)
+                        Divider().opacity(0.25)
+                    }
+                }
+            }
+            .frame(maxHeight: 280)
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.system(size: 11))
+                    .foregroundStyle(PaperTheme.warmAccent)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Button(I18N.shared.localized("取消", "Cancel"), action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button(confirmTitle) {
+                    onConfirm(selected)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(selected.isEmpty)
+            }
+        }
+        .padding(16)
+        .frame(width: 460)
+    }
+
+    private var title: String {
+        let count = proposal.items.count
+        if proposal.kind == .markRead {
+            return proposal.desiredValue
+                ? I18N.localizedFormat("确认标记 %lld 篇为已读？", arguments: [count])
+                : I18N.localizedFormat("确认将 %lld 篇标为未读？", arguments: [count])
+        }
+        return proposal.desiredValue
+            ? I18N.localizedFormat("确认给 %lld 篇加星标？", arguments: [count])
+            : I18N.localizedFormat("确认取消 %lld 篇的星标？", arguments: [count])
+    }
+
+    private var confirmTitle: String {
+        I18N.localizedFormat("确认处理 %lld 篇", arguments: [selected.count])
     }
 }

@@ -1390,6 +1390,22 @@ struct SettingsView: View {
                     LazyVGrid(columns: aiFeatureColumns, alignment: .leading, spacing: 16) {
                         featureConfigurationRow(.agent)
                     }
+                    settingsRow(
+                        I18N.shared.localized("写权限", "Write permission"),
+                        description: I18N.shared.localized(
+                            "助手只能提出建议，每次执行前仍需确认。默认关闭。",
+                            "The assistant can only propose changes; every execution still needs confirmation. Off by default."
+                        )
+                    ) {
+                        Picker("", selection: agentWritePermissionBinding) {
+                            Text(I18N.shared.localized("关闭", "Off")).tag(AgentWritePermission.off)
+                            Text(I18N.shared.localized("仅标记已读", "Mark read only")).tag(AgentWritePermission.markRead)
+                            Text(I18N.shared.localized("已读 + 星标", "Read + star")).tag(AgentWritePermission.readAndStar)
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .fixedSize()
+                    }
                 }
 
                 aiFeatureSection(I18N.shared.localized("划词能力", "Selection Features")) {
@@ -1513,6 +1529,17 @@ struct SettingsView: View {
             }
             content()
         }
+    }
+
+    private var agentWritePermissionBinding: Binding<AgentWritePermission> {
+        Binding(
+            get: { store.aiSettings.features.agentWritePermission },
+            set: { value in
+                var features = store.aiSettings.features
+                features.agentWritePermission = value
+                store.saveAISettings(store.aiSettings.updatingFeatures(features))
+            }
+        )
     }
 
     private func featureConfigurationRow(_ kind: AIFeatureKind) -> some View {

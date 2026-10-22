@@ -2316,6 +2316,19 @@ public final class AppStore: ObservableObject {
         }
     }
 
+    /// Batch variant used by confirmed assistant proposals. Keeps the same
+    /// single-entry write path and outbox semantics as the manual star action.
+    public func markStarred(entryIDs: [String], starred: Bool = true) {
+        guard !entryIDs.isEmpty else { return }
+        for entryID in entryIDs {
+            try? localProvider.markStarred(entryID: entryID, starred: starred)
+        }
+        reloadState()
+        Task { [weak self] in
+            await self?.syncCoordinator.pushAllPendingArticleStates()
+        }
+    }
+
     public func toggleStar(_ entry: Entry) {
         markStarred(entry, starred: !entry.isStarred)
     }

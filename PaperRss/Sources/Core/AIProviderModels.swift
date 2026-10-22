@@ -145,6 +145,15 @@ public struct AIModelOption: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+public enum AgentWritePermission: String, Codable, CaseIterable, Hashable, Sendable {
+    case off
+    case markRead
+    case readAndStar
+
+    public var allowsMarkRead: Bool { self != .off }
+    public var allowsStar: Bool { self == .readAndStar }
+}
+
 /// Settings that describe reader-facing AI behavior, rather than a network
 /// connection. They intentionally remain unchanged when the active provider
 /// changes.
@@ -161,6 +170,9 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
     /// 也可以单独控制。
     public var automaticallyTranslateTitles: Bool
     public var translationPreferences: TranslationPreferences
+    /// Assistant write proposals require an explicit confirmation; this gate
+    /// only controls which proposal tools are even offered to the model.
+    public var agentWritePermission: AgentWritePermission
 
     public static let `default` = AIFeaturePreferences(
         targetLanguage: "简体中文",
@@ -182,7 +194,8 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
         customPrompt: String = "",
         translationPreferences: TranslationPreferences = .default,
         automaticallyTranslate: Bool = false,
-        automaticallyTranslateTitles: Bool = false
+        automaticallyTranslateTitles: Bool = false,
+        agentWritePermission: AgentWritePermission = .off
     ) {
         self.targetLanguage = targetLanguage
         self.showsAISummary = showsAISummary
@@ -194,6 +207,7 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
         self.translationPreferences = translationPreferences
         self.automaticallyTranslate = automaticallyTranslate
         self.automaticallyTranslateTitles = automaticallyTranslateTitles
+        self.agentWritePermission = agentWritePermission
     }
 
     public init(configuration: LLMConfiguration, translationPreferences: TranslationPreferences = .default, automaticallyTranslate: Bool = false) {
@@ -213,6 +227,7 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
         case targetLanguage, showsAISummary, automaticallyGenerateSummary
         case showsSelectionExplanation, showsSelectionAsk, showsSelectionTranslation, customPrompt
         case translationPreferences, automaticallyTranslate, automaticallyTranslateTitles
+        case agentWritePermission
     }
 
     public init(from decoder: Decoder) throws {
@@ -227,7 +242,8 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
             customPrompt: try values.decodeIfPresent(String.self, forKey: .customPrompt) ?? "",
             translationPreferences: try values.decodeIfPresent(TranslationPreferences.self, forKey: .translationPreferences) ?? .default,
             automaticallyTranslate: try values.decodeIfPresent(Bool.self, forKey: .automaticallyTranslate) ?? false,
-            automaticallyTranslateTitles: try values.decodeIfPresent(Bool.self, forKey: .automaticallyTranslateTitles) ?? false
+            automaticallyTranslateTitles: try values.decodeIfPresent(Bool.self, forKey: .automaticallyTranslateTitles) ?? false,
+            agentWritePermission: try values.decodeIfPresent(AgentWritePermission.self, forKey: .agentWritePermission) ?? .off
         )
     }
 
