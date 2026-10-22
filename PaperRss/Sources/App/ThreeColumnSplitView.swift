@@ -86,6 +86,7 @@ private struct TimelineReturnGlassButton: View {
 /// 由 SwiftUI 视图层传入的工具栏动作和状态
 struct ToolbarActions {
     let onRefresh: () -> Void
+    let onToggleAgent: () -> Void
     let onAddFeed: () -> Void
     let onAddFolder: () -> Void
     let onImport: () -> Void
@@ -120,6 +121,7 @@ struct ToolbarActions {
 
     init(
         onRefresh: @escaping () -> Void,
+        onToggleAgent: @escaping () -> Void = {},
         onAddFeed: @escaping () -> Void,
         onAddFolder: @escaping () -> Void,
         onImport: @escaping () -> Void,
@@ -150,6 +152,7 @@ struct ToolbarActions {
         onTimelineKey: @escaping (UInt16) -> Void = { _ in }
     ) {
         self.onRefresh = onRefresh
+        self.onToggleAgent = onToggleAgent
         self.onAddFeed = onAddFeed
         self.onAddFolder = onAddFolder
         self.onImport = onImport
@@ -1252,7 +1255,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 }
                 return [.flexibleSpace, .paperReaderCapsule, .flexibleSpace]
             }
-            var result: [NSToolbarItem.Identifier] = [.toggleSidebar, .paperRefresh, .paperAddMenu]
+            var result: [NSToolbarItem.Identifier] = [.toggleSidebar, .paperRefresh, .paperAddMenu, .paperAgent]
             if !sidebarCollapsed { result.append(.paperSidebarTracker) }
             if actions.usesMagazineTimeline {
                 if actions.isTimelineBrowsing {
@@ -2066,6 +2069,22 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 self.refreshItem = item
                 return item
 
+            case .paperAgent:
+                let item = NSToolbarItem(itemIdentifier: .paperAgent)
+                item.label = I18N.localized("AI 助手")
+                item.paletteLabel = I18N.localized("AI 助手")
+                item.toolTip = I18N.localized("打开 AI 助手（⌘⇧A）")
+                item.autovalidates = false
+                let button = NSButton()
+                button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: I18N.localized("AI 助手"))
+                button.bezelStyle = .texturedRounded
+                button.isBordered = true
+                button.contentTintColor = chromeInkColor
+                button.target = self
+                button.action = #selector(doToggleAgent)
+                item.view = button
+                return item
+
             case .paperAddMenu:
                 let item = NSMenuToolbarItem(itemIdentifier: .paperAddMenu)
                 item.label = I18N.localized("添加")
@@ -2324,6 +2343,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         // MARK: 动作方法
 
         @objc private func doReturnToTimeline() { actions.onReturnToTimeline() }
+        @objc private func doToggleAgent() { actions.onToggleAgent() }
+
         @objc private func doRefresh() { 
             // 阻断重复点击
             if actions.isRefreshing { return }
@@ -2399,6 +2420,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
 extension NSToolbarItem.Identifier {
     static let paperRefresh = NSToolbarItem.Identifier("com.paperrss.toolbar.refresh")
+    static let paperAgent = NSToolbarItem.Identifier("com.paperrss.toolbar.agent")
     static let paperAddMenu = NSToolbarItem.Identifier("com.paperrss.toolbar.addMenu")
     static let paperSidebarTracker = NSToolbarItem.Identifier("com.paperrss.toolbar.sidebarTracker")
     static let paperTimelineTracker = NSToolbarItem.Identifier("com.paperrss.toolbar.timelineTracker")

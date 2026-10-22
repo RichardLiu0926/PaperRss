@@ -54,6 +54,7 @@ extension NSToolbarItem.Identifier {
     static let paperEntryListTitle = Self("title")
     static let paperReaderCapsule = Self("reader")
     static let paperRefresh = Self("refresh")
+    static let paperAgent = Self("agent")
     static let paperAddMenu = Self("add")
     static let paperMarkAllRead = Self("mark")
     static let paperUnreadFilter = Self("filter")

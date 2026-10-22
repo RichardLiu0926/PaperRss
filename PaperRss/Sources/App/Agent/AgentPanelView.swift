@@ -99,9 +99,13 @@ final class AgentPanelModel: ObservableObject {
     }
 
     func refreshScope() {
-        scopeCount = (try? query.count(scope: scope, accountID: store.activeAccountID)) ?? 0
+        scopeCount = previewCount(for: scope)
         feedOptions = (try? query.feedOptions(accountID: store.activeAccountID)) ?? []
         folderOptions = (try? query.folderOptions(accountID: store.activeAccountID)) ?? []
+    }
+
+    func previewCount(for candidate: AgentScope) -> Int {
+        (try? query.count(scope: candidate, accountID: store.activeAccountID)) ?? 0
     }
 
     func applyScope(_ next: AgentScope) {
@@ -410,6 +414,7 @@ struct AgentPanelView: View {
                     feeds: model.feedOptions,
                     folders: model.folderOptions,
                     count: model.scopeCount,
+                    countProvider: { model.previewCount(for: $0) },
                     onCancel: { showsScopePicker = false },
                     onApply: { scope in
                         model.applyScope(scope)
@@ -895,6 +900,7 @@ private struct AgentScopePickerView: View {
     let feeds: [AgentSourceOption]
     let folders: [AgentSourceOption]
     let count: Int
+    let countProvider: (AgentScope) -> Int
     let onCancel: () -> Void
     let onApply: (AgentScope) -> Void
 
@@ -902,20 +908,24 @@ private struct AgentScopePickerView: View {
     @State private var timePreset: TimePreset
     @State private var selectedFeeds: Set<String>
     @State private var selectedFolders: Set<String>
+    @State private var previewCount: Int
 
     init(
         current: AgentScope,
         feeds: [AgentSourceOption],
         folders: [AgentSourceOption],
         count: Int,
+        countProvider: @escaping (AgentScope) -> Int,
         onCancel: @escaping () -> Void,
         onApply: @escaping (AgentScope) -> Void
     ) {
         self.feeds = feeds
         self.folders = folders
         self.count = count
+        self.countProvider = countProvider
         self.onCancel = onCancel
         self.onApply = onApply
+        _previewCount = State(initialValue: count)
         switch current.source {
         case .all:
             _mode = State(initialValue: .all)
@@ -1000,7 +1010,7 @@ private struct AgentScopePickerView: View {
             }
             .pickerStyle(.menu)
 
-            Text(I18N.localizedFormat("当前范围 %lld 篇未读", arguments: [count]))
+            Text(I18N.localizedFormat("预计 %lld 篇未读", arguments: [previewCount]))
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
 
@@ -1017,6 +1027,14 @@ private struct AgentScopePickerView: View {
         }
         .padding(14)
         .frame(width: 340)
+        .onChange(of: mode) { _, _ in refreshPreview() }
+        .onChange(of: selectedFeeds) { _, _ in refreshPreview() }
+        .onChange(of: selectedFolders) { _, _ in refreshPreview() }
+        .onChange(of: timePreset) { _, _ in refreshPreview() }
+    }
+
+    private func refreshPreview() {
+        previewCount = countProvider(buildScope())
     }
 
     private var invalidSelection: Bool {

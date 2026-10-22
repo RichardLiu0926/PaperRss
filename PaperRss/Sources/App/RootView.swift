@@ -502,6 +502,7 @@ struct RootView: View {
                 .ignoresSafeArea(),
             toolbarActions: ToolbarActions(
                 onRefresh: { [store] in Task { await store.refresh() } },
+                onToggleAgent: { toggleAgentPanel() },
                 onAddFeed: { initialFeedDestination = nil; showsAddFeed = true },
                 onAddFolder: { initialFolderAccountID = nil; showsAddFolder = true },
                 onImport: { showsImporter = true },

@@ -160,6 +160,7 @@ struct SettingsView: View {
     @ObservedObject var updateCoordinator: UpdateCoordinator
     #endif
     @State private var selectedSection: SettingsSection = SettingsSection.allCases.first ?? .general
+    @State private var showsAgentActions = false
     @ObservedObject var editor = AISettingsEditingSession()
     var isActive = true
     var onReturn: (() -> Void)?
@@ -1405,6 +1406,20 @@ struct SettingsView: View {
                         .pickerStyle(.menu)
                         .labelsHidden()
                         .fixedSize()
+                    }
+                    settingsRow(
+                        I18N.shared.localized("操作记录", "Activity"),
+                        description: I18N.shared.localized(
+                            "查看助手执行过的标记，最近 24 小时内可撤销。",
+                            "Review changes made by the assistant; undo within 24 hours."
+                        )
+                    ) {
+                        Button(I18N.shared.localized("查看…", "View…")) {
+                            showsAgentActions = true
+                        }
+                        .sheet(isPresented: $showsAgentActions) {
+                            AgentActionHistoryView(store: store)
+                        }
                     }
                 }
 
