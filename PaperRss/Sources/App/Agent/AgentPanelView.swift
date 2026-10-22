@@ -1147,7 +1147,7 @@ private struct AgentScopePickerView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 190)
+                .frame(height: 190)
                 .background(RoundedRectangle(cornerRadius: 7).strokeBorder(.quaternary))
             }
 
