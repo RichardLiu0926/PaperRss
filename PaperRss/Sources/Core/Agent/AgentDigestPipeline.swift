@@ -5,6 +5,11 @@ import Foundation
 /// artifacts are layered on top later; this type already keeps the prompt,
 /// parsing, and limits testable without any UI.
 public final class AgentDigestPipeline: Sendable {
+    private struct ScreeningUnit {
+        let cluster: AgentArticleCluster
+        let representative: AgentArticleSummary
+    }
+
     private let query: AgentArticleQuery
     private let articles: ArticleRepository
     private let cache: CacheRepository
@@ -38,13 +43,14 @@ public final class AgentDigestPipeline: Sendable {
         let summaries = try query.fetch(scope: scope, accountID: accountID, limit: limit)
         guard !summaries.isEmpty else { throw AgentDigestError.emptyScope }
 
+        let units = try await screeningUnits(for: summaries)
         let batchLength = max(1, min(batchSize, 10))
         var verdicts: [String: (verdict: AgentTriageVerdict, reason: String, failed: Bool)] = [:]
         var completed = 0
 
-        for batch in stride(from: 0, to: summaries.count, by: batchLength) {
+        for batch in stride(from: 0, to: units.count, by: batchLength) {
             try Task.checkCancellation()
-            let slice = Array(summaries[batch..<min(batch + batchLength, summaries.count)])
+            let slice = Array(units[batch..<min(batch + batchLength, units.count)])
             // A malformed batch must not abort the whole digest; retry each
             // article once and degrade only the failures.
             let parsed: [String: (verdict: AgentTriageVerdict, reason: String, failed: Bool)]
@@ -59,14 +65,15 @@ public final class AgentDigestPipeline: Sendable {
             } catch {
                 parsed = [:]
             }
-            for item in slice {
-                if let result = parsed[item.id] {
-                    verdicts[item.id] = result
+            for unit in slice {
+                let id = unit.representative.id
+                if let result = parsed[id] {
+                    verdicts[id] = result
                 } else {
                     let single: [String: (verdict: AgentTriageVerdict, reason: String, failed: Bool)]
                     do {
                         single = try await analyzeBatch(
-                            [item],
+                            [unit],
                             configuration: configuration,
                             apiKey: apiKey
                         )
@@ -75,7 +82,7 @@ public final class AgentDigestPipeline: Sendable {
                     } catch {
                         single = [:]
                     }
-                    verdicts[item.id] = single[item.id] ?? (
+                    verdicts[id] = single[id] ?? (
                         .later,
                         I18N.localized("分析失败，可重试。", englishFallback: "Analysis failed; retry when ready."),
                         true
@@ -86,7 +93,8 @@ public final class AgentDigestPipeline: Sendable {
             await onProgress?(.analyzing(completed: completed, total: summaries.count))
         }
 
-        var items = summaries.map { summary -> AgentDigestItem in
+        var items = units.map { unit -> AgentDigestItem in
+            let summary = unit.representative
             let outcome = verdicts[summary.id] ?? (
                 .later,
                 I18N.localized("未分析。", englishFallback: "Not analyzed."),
@@ -102,7 +110,9 @@ public final class AgentDigestPipeline: Sendable {
                 reason: outcome.reason,
                 isRead: summary.isRead,
                 isStarred: summary.isStarred,
-                analysisFailed: outcome.failed
+                analysisFailed: outcome.failed,
+                duplicateIDs: unit.cluster.duplicateIDs,
+                clusterReason: unit.cluster.similarityReason
             )
         }
         items.sort(by: Self.rank)
@@ -132,7 +142,9 @@ public final class AgentDigestPipeline: Sendable {
                         bullets: bullets,
                         isRead: old.isRead,
                         isStarred: old.isStarred,
-                        analysisFailed: old.analysisFailed
+                        analysisFailed: old.analysisFailed,
+                        duplicateIDs: old.duplicateIDs,
+                        clusterReason: old.clusterReason
                     )
                     deepReadCount += 1
                 }
@@ -145,7 +157,7 @@ public final class AgentDigestPipeline: Sendable {
             scope: scope,
             generatedAt: .now,
             unreadCount: unreadCount,
-            analyzedCount: summaries.count,
+            analyzedCount: units.count,
             deepReadCount: deepReadCount,
             model: configuration.model,
             items: items
@@ -154,8 +166,32 @@ public final class AgentDigestPipeline: Sendable {
 
     // MARK: - Screening
 
+    private func screeningUnits(for summaries: [AgentArticleSummary]) async throws -> [ScreeningUnit] {
+        var candidates: [AgentClusterCandidate] = []
+        for summary in summaries {
+            let cached = try? await cache.fetchCacheModel(itemID: summary.id)
+            let text = cached?.text
+            candidates.append(AgentClusterCandidate(
+                id: summary.id,
+                title: summary.title,
+                summary: summary.summary,
+                url: summary.url?.absoluteString,
+                feedID: summary.feedID,
+                publishedAt: summary.publishedAt,
+                contentHash: text.flatMap { $0.isEmpty ? nil : $0.stableDigest },
+                contentCharacters: text?.count ?? summary.summary.count
+            ))
+        }
+        let clusters = AgentTopicClusterer().cluster(candidates)
+        let summariesByID = Dictionary(uniqueKeysWithValues: summaries.map { ($0.id, $0) })
+        return clusters.compactMap { cluster in
+            guard let representative = summariesByID[cluster.representativeID] else { return nil }
+            return ScreeningUnit(cluster: cluster, representative: representative)
+        }
+    }
+
     private func analyzeBatch(
-        _ summaries: [AgentArticleSummary],
+        _ units: [ScreeningUnit],
         configuration: LLMConfiguration,
         apiKey: String
     ) async throws -> [String: (verdict: AgentTriageVerdict, reason: String, failed: Bool)] {
@@ -164,10 +200,16 @@ public final class AgentDigestPipeline: Sendable {
         You triage unread articles for a reader. Return ONLY a JSON array. Each element must be:
         {"id":"<id from input>","verdict":"worth_reading|skippable|later","reason":"<one sentence, max 40 characters>"}
         Use only ids from the input. Judge by relevance, information density, and duplication; do not invent facts. Reasons must be written in \(language).
+        Input items may list same-story duplicates. Return ONE verdict per id; it covers all duplicates in that group.
         """
-        let prompt = summaries.enumerated().map { index, summary -> String in
+        let prompt = units.enumerated().map { index, unit -> String in
+            let summary = unit.representative
             let date = summary.publishedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown"
-            return "\(index + 1). id=\(summary.id)\nfeed=\(summary.feedTitle)\npublished=\(date)\ntitle=\(summary.title)\nsummary=\(summary.summary)"
+            var line = "\(index + 1). id=\(summary.id)\nfeed=\(summary.feedTitle)\npublished=\(date)\ntitle=\(summary.title)\nsummary=\(summary.summary)"
+            if !unit.cluster.duplicateIDs.isEmpty {
+                line += "\nsame_story_duplicates=\(unit.cluster.duplicateIDs.count)"
+            }
+            return line
         }.joined(separator: "\n\n")
 
         let completion = try await llm.chat(
@@ -175,7 +217,7 @@ public final class AgentDigestPipeline: Sendable {
             configuration: configuration,
             apiKey: apiKey
         )
-        let allowed = Set(summaries.map(\.id))
+        let allowed = Set(units.map { $0.representative.id })
         return try Self.parseVerdicts(completion.content, allowedIDs: allowed, language: language)
     }
 
