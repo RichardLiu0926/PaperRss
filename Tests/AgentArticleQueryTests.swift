@@ -117,6 +117,14 @@ final class AgentArticleQueryTests: XCTestCase {
         let folders = try query.folderOptions(accountID: "local-default")
         XCTAssertEqual(folders.first(where: { $0.id == "fo1" })?.unreadCount, 3)
         XCTAssertEqual(folders.first(where: { $0.id == "fo2" })?.unreadCount, 3)
+
+        // The assistant is window-wide: a nil account must expose every enabled
+        // account, otherwise a synced account with no local items looks empty.
+        let allFeeds = try query.feedOptions(accountID: nil)
+        XCTAssertTrue(allFeeds.contains { $0.id == "f4" })
+        let allFolders = try query.folderOptions(accountID: nil)
+        XCTAssertTrue(allFolders.contains { $0.id == "fo3" })
+        XCTAssertEqual(try query.count(scope: AgentScope(), accountID: nil), 5)
     }
 
     func testScopeJSONRoundTrip() throws {

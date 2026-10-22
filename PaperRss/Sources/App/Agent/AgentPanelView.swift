@@ -145,12 +145,12 @@ final class AgentPanelModel: ObservableObject {
 
     func refreshScope() {
         scopeCount = previewCount(for: scope)
-        feedOptions = (try? query.feedOptions(accountID: store.activeAccountID)) ?? []
-        folderOptions = (try? query.folderOptions(accountID: store.activeAccountID)) ?? []
+        feedOptions = (try? query.feedOptions(accountID: nil)) ?? []
+        folderOptions = (try? query.folderOptions(accountID: nil)) ?? []
     }
 
     func previewCount(for candidate: AgentScope) -> Int {
-        (try? query.count(scope: candidate, accountID: store.activeAccountID)) ?? 0
+        (try? query.count(scope: candidate, accountID: nil)) ?? 0
     }
 
     func applyScope(_ next: AgentScope) {
@@ -192,7 +192,11 @@ final class AgentPanelModel: ObservableObject {
         let providerID = store.aiSettings.configuration(for: .agent)?.model?.providerID ?? ""
         let apiKey = store.apiKey(for: providerID)
         let scope = self.scope
-        let accountID = store.activeAccountID
+        // The assistant is a window-wide surface: "all sources" must cover every
+        // enabled account, not AppStore.activeAccountID (which can lag behind
+        // the account selected in the sidebar, or point at a disabled local
+        // account).
+        let accountID: String? = nil
         if !force,
            let cached = try? digestCache.load(
                 scope: scope,
@@ -249,7 +253,7 @@ final class AgentPanelModel: ObservableObject {
         guard let configuration else { return }
         if let cached = try? digestCache.load(
             scope: scope,
-            accountID: store.activeAccountID,
+            accountID: nil,
             configuration: configuration,
             maximumArticles: 30,
             deepReadLimit: 5
@@ -303,7 +307,7 @@ final class AgentPanelModel: ObservableObject {
                 ids: ids,
                 desiredValue: true,
                 reason: reason,
-                accountID: store.activeAccountID
+                accountID: nil
             )
             controller.presentProposal(proposal)
             actionError = nil
@@ -328,7 +332,7 @@ final class AgentPanelModel: ObservableObject {
             apiKey: apiKey,
             tools: tools,
             toolContext: AgentToolContext(
-                accountID: store.activeAccountID,
+                accountID: nil,
                 scope: scope,
                 sessionID: controller.currentSessionID
             ),
@@ -348,7 +352,7 @@ final class AgentPanelModel: ObservableObject {
                     if let configuration {
                         try? digestCache.save(
                             updated,
-                            accountID: store.activeAccountID,
+                            accountID: nil,
                             configuration: configuration,
                             maximumArticles: 30,
                             deepReadLimit: 5
