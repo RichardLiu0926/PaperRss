@@ -145,6 +145,25 @@ public struct AIModelOption: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+public enum AgentToolProtocol: String, Codable, CaseIterable, Hashable, Sendable {
+    case native
+    case textJSON
+
+    public var titleZH: String {
+        switch self {
+        case .native: "原生工具调用"
+        case .textJSON: "文本 JSON"
+        }
+    }
+
+    public var titleEN: String {
+        switch self {
+        case .native: "Native tool calling"
+        case .textJSON: "Text JSON"
+        }
+    }
+}
+
 public enum AgentWritePermission: String, Codable, CaseIterable, Hashable, Sendable {
     case off
     case markRead
@@ -173,6 +192,9 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
     /// Assistant write proposals require an explicit confirmation; this gate
     /// only controls which proposal tools are even offered to the model.
     public var agentWritePermission: AgentWritePermission
+    /// Native function calling is the default; text JSON is the fallback for
+    /// local models that do not implement `tools` but can follow a JSON format.
+    public var agentToolProtocol: AgentToolProtocol
 
     public static let `default` = AIFeaturePreferences(
         targetLanguage: "简体中文",
@@ -195,7 +217,8 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
         translationPreferences: TranslationPreferences = .default,
         automaticallyTranslate: Bool = false,
         automaticallyTranslateTitles: Bool = false,
-        agentWritePermission: AgentWritePermission = .off
+        agentWritePermission: AgentWritePermission = .off,
+        agentToolProtocol: AgentToolProtocol = .native
     ) {
         self.targetLanguage = targetLanguage
         self.showsAISummary = showsAISummary
@@ -208,6 +231,7 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
         self.automaticallyTranslate = automaticallyTranslate
         self.automaticallyTranslateTitles = automaticallyTranslateTitles
         self.agentWritePermission = agentWritePermission
+        self.agentToolProtocol = agentToolProtocol
     }
 
     public init(configuration: LLMConfiguration, translationPreferences: TranslationPreferences = .default, automaticallyTranslate: Bool = false) {
@@ -228,6 +252,7 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
         case showsSelectionExplanation, showsSelectionAsk, showsSelectionTranslation, customPrompt
         case translationPreferences, automaticallyTranslate, automaticallyTranslateTitles
         case agentWritePermission
+        case agentToolProtocol
     }
 
     public init(from decoder: Decoder) throws {
@@ -243,7 +268,8 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
             translationPreferences: try values.decodeIfPresent(TranslationPreferences.self, forKey: .translationPreferences) ?? .default,
             automaticallyTranslate: try values.decodeIfPresent(Bool.self, forKey: .automaticallyTranslate) ?? false,
             automaticallyTranslateTitles: try values.decodeIfPresent(Bool.self, forKey: .automaticallyTranslateTitles) ?? false,
-            agentWritePermission: try values.decodeIfPresent(AgentWritePermission.self, forKey: .agentWritePermission) ?? .off
+            agentWritePermission: try values.decodeIfPresent(AgentWritePermission.self, forKey: .agentWritePermission) ?? .off,
+            agentToolProtocol: try values.decodeIfPresent(AgentToolProtocol.self, forKey: .agentToolProtocol) ?? .native
         )
     }
 

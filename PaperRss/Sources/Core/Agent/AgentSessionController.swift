@@ -82,7 +82,8 @@ public final class AgentSessionController: ObservableObject {
         apiKey: String,
         systemPrompt: String = AgentSessionController.defaultSystemPrompt,
         tools: [AgentToolDefinition]? = nil,
-        toolContext: AgentToolContext? = nil
+        toolContext: AgentToolContext? = nil,
+        toolProtocol: AgentToolProtocol = .native
     ) {
         guard !isStreaming, let session else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -116,7 +117,8 @@ public final class AgentSessionController: ObservableObject {
                 configuration: configuration,
                 apiKey: apiKey,
                 tools: enabledTools,
-                toolContext: toolContext
+                toolContext: toolContext,
+                toolProtocol: toolProtocol
             )
         }
     }
@@ -173,7 +175,8 @@ public final class AgentSessionController: ObservableObject {
         configuration: LLMConfiguration,
         apiKey: String,
         tools: [AgentToolDefinition],
-        toolContext: AgentToolContext?
+        toolContext: AgentToolContext?,
+        toolProtocol: AgentToolProtocol
     ) async {
         defer {
             isStreaming = false
@@ -182,11 +185,14 @@ public final class AgentSessionController: ObservableObject {
         do {
             var working = context
             let allowedToolNames = Set(tools.map(\.name))
+            if toolProtocol == .textJSON, !tools.isEmpty, let system = working.first, system.role == .system {
+                working[0] = .system(system.content + "\n\n" + AgentTextToolCallParser.instructions(for: tools))
+            }
             for _ in 0..<Self.maximumToolRounds {
                 streamingText = ""
                 let completion = try await llm.chat(
                     messages: working,
-                    tools: tools,
+                    tools: toolProtocol == .native ? tools : [],
                     configuration: configuration,
                     apiKey: apiKey,
                     onDelta: { [weak self] delta in
@@ -199,6 +205,64 @@ public final class AgentSessionController: ObservableObject {
                 // a final chunk; never persist a turn after the user pressed
                 // stop.
                 try Task.checkCancellation()
+
+                if toolProtocol == .textJSON {
+                    if let call = AgentTextToolCallParser.parse(
+                        completion.content,
+                        allowedToolNames: allowedToolNames
+                    ) {
+                        let assistant = try repository.appendMessage(
+                            sessionID: sessionID,
+                            role: .assistant,
+                            content: "",
+                            toolCalls: [call]
+                        )
+                        messages.append(assistant)
+                        // Text-only models often do not understand the `tool`
+                        // role; give them the observation as a user message.
+                        working.append(.assistant(completion.content))
+                        let result = await executeTool(
+                            call,
+                            context: toolContext,
+                            allowedToolNames: allowedToolNames
+                        )
+                        switch result {
+                        case .text(let content):
+                            let toolMessage = try repository.appendMessage(
+                                sessionID: sessionID,
+                                role: .tool,
+                                content: content,
+                                toolCallID: call.id
+                            )
+                            messages.append(toolMessage)
+                            working.append(.user("TOOL_RESULT \(call.name): \(content)"))
+                        case .proposal(let proposal):
+                            pendingProposal = proposal
+                            let payload = #"{"status":"pending_confirmation","count":\#(proposal.count),"kind":"\#(proposal.kind.rawValue)"}"#
+                            let toolMessage = try repository.appendMessage(
+                                sessionID: sessionID,
+                                role: .tool,
+                                content: payload,
+                                toolCallID: call.id
+                            )
+                            messages.append(toolMessage)
+                            refreshSession(sessionID)
+                            streamingText = ""
+                            return
+                        }
+                        refreshSession(sessionID)
+                        continue
+                    }
+                    let assistant = try repository.appendMessage(
+                        sessionID: sessionID,
+                        role: .assistant,
+                        content: completion.content
+                    )
+                    messages.append(assistant)
+                    refreshSession(sessionID)
+                    streamingText = ""
+                    return
+                }
 
                 guard !completion.toolCalls.isEmpty else {
                     let assistant = try repository.appendMessage(

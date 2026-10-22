@@ -1408,6 +1408,21 @@ struct SettingsView: View {
                         .fixedSize()
                     }
                     settingsRow(
+                        I18N.shared.localized("工具调用协议", "Tool protocol"),
+                        description: I18N.shared.localized(
+                            "模型支持 tools 时用原生；不支持时用文本 JSON。切换后重新打开助手生效。",
+                            "Use native when the model supports tools; otherwise text JSON. Reopen the assistant after switching."
+                        )
+                    ) {
+                        Picker("", selection: agentToolProtocolBinding) {
+                            Text(I18N.shared.localized("原生", "Native")).tag(AgentToolProtocol.native)
+                            Text(I18N.shared.localized("文本 JSON", "Text JSON")).tag(AgentToolProtocol.textJSON)
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                    settingsRow(
                         I18N.shared.localized("操作记录", "Activity"),
                         description: I18N.shared.localized(
                             "查看助手执行过的标记，最近 24 小时内可撤销。",
@@ -1544,6 +1559,17 @@ struct SettingsView: View {
             }
             content()
         }
+    }
+
+    private var agentToolProtocolBinding: Binding<AgentToolProtocol> {
+        Binding(
+            get: { store.aiSettings.features.agentToolProtocol },
+            set: { value in
+                var features = store.aiSettings.features
+                features.agentToolProtocol = value
+                store.saveAISettings(store.aiSettings.updatingFeatures(features))
+            }
+        )
     }
 
     private var agentWritePermissionBinding: Binding<AgentWritePermission> {

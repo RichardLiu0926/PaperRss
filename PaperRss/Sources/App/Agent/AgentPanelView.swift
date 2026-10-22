@@ -289,7 +289,8 @@ final class AgentPanelModel: ObservableObject {
                 accountID: store.activeAccountID,
                 scope: scope,
                 sessionID: controller.currentSessionID
-            )
+            ),
+            toolProtocol: store.aiSettings.features.agentToolProtocol
         )
         draft = ""
     }
