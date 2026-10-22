@@ -169,6 +169,7 @@ public final class AgentSessionController: ObservableObject {
         }
         do {
             var working = context
+            let allowedToolNames = Set(tools.map(\.name))
             for _ in 0..<Self.maximumToolRounds {
                 streamingText = ""
                 let completion = try await llm.chat(
@@ -210,7 +211,7 @@ public final class AgentSessionController: ObservableObject {
 
                 for call in completion.toolCalls {
                     try Task.checkCancellation()
-                    let result = await executeTool(call, context: toolContext)
+                    let result = await executeTool(call, context: toolContext, allowedToolNames: allowedToolNames)
                     switch result {
                     case .text(let content):
                         let toolMessage = try repository.appendMessage(
@@ -267,9 +268,16 @@ public final class AgentSessionController: ObservableObject {
         case proposal(AgentWriteProposal)
     }
 
-    private func executeTool(_ call: AgentToolCall, context: AgentToolContext?) async -> ToolExecutionResult {
+    private func executeTool(
+        _ call: AgentToolCall,
+        context: AgentToolContext?,
+        allowedToolNames: Set<String>
+    ) async -> ToolExecutionResult {
         guard let toolRegistry, let context else {
             return .text(Self.errorJSON("Tools are not enabled for this conversation."))
+        }
+        guard allowedToolNames.contains(call.name) else {
+            return .text(Self.errorJSON("Tool is not enabled for this conversation: \(call.name)"))
         }
         do {
             let outcome = try await toolRegistry.execute(call, context: context)
