@@ -127,15 +127,15 @@ final class AgentPanelModel: ObservableObject {
         case .all:
             parts.append(I18N.shared.localized("全部源", "All feeds"))
         case .feeds(let ids):
-            parts.append(I18N.localizedFormat("%lld 个源", arguments: [ids.count]))
+            parts.append(AgentL10n.format("%lld 个源", "%lld feeds", [ids.count]))
         case .folders(let refs):
-            parts.append(I18N.localizedFormat("%lld 个分组", arguments: [refs.count]))
+            parts.append(AgentL10n.format("%lld 个分组", "%lld groups", [refs.count]))
         }
         if let from = scope.from {
             let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: from), to: Calendar.current.startOfDay(for: .now)).day ?? 0
             switch days {
             case 0: parts.append(I18N.shared.localized("今天", "Today"))
-            case 1...3: parts.append(I18N.localizedFormat("近 %lld 天", arguments: [days + 1]))
+            case 1...3: parts.append(AgentL10n.format("近 %lld 天", "Last %lld days", [days + 1]))
             case 4...7: parts.append(I18N.shared.localized("近 7 天", "Last 7 days"))
             default:
                 let formatter = DateFormatter()
@@ -230,9 +230,9 @@ final class AgentPanelModel: ObservableObject {
         case .counting:
             I18N.shared.localized("正在统计未读…", "Counting unread…")
         case .analyzing(let completed, let total):
-            I18N.localizedFormat("正在分析 %lld / %lld…", arguments: [completed, total])
+            AgentL10n.format("正在分析 %lld / %lld…", "Analyzing %lld / %lld…", [completed, total])
         case .deepReading(let completed, let total):
-            I18N.localizedFormat("正在深读 %lld / %lld…", arguments: [completed, total])
+            AgentL10n.format("正在深读 %lld / %lld…", "Deep reading %lld / %lld…", [completed, total])
         case .finished, .none:
             ""
         }
@@ -510,7 +510,7 @@ struct AgentPanelView: View {
         HStack(spacing: 8) {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(PaperTheme.accent)
-            Text(I18N.localizedFormat("已处理 %lld 篇", arguments: [action.affectedIDs.count]))
+            Text(AgentL10n.format("已处理 %lld 篇", "%lld articles processed", [action.affectedIDs.count]))
                 .font(.system(size: 11))
             Spacer()
             Button(I18N.shared.localized("撤销", "Undo")) {
@@ -903,16 +903,16 @@ private struct AgentWriteConfirmationView: View {
         let count = proposal.items.count
         if proposal.kind == .markRead {
             return proposal.desiredValue
-                ? I18N.localizedFormat("确认标记 %lld 篇为已读？", arguments: [count])
-                : I18N.localizedFormat("确认将 %lld 篇标为未读？", arguments: [count])
+                ? AgentL10n.format("确认标记 %lld 篇为已读？", "Mark %lld articles as read?", [count])
+                : AgentL10n.format("确认将 %lld 篇标为未读？", "Mark %lld articles as unread?", [count])
         }
         return proposal.desiredValue
-            ? I18N.localizedFormat("确认给 %lld 篇加星标？", arguments: [count])
-            : I18N.localizedFormat("确认取消 %lld 篇的星标？", arguments: [count])
+            ? AgentL10n.format("确认给 %lld 篇加星标？", "Star %lld articles?", [count])
+            : AgentL10n.format("确认取消 %lld 篇的星标？", "Unstar %lld articles?", [count])
     }
 
     private var confirmTitle: String {
-        I18N.localizedFormat("确认处理 %lld 篇", arguments: [selected.count])
+        AgentL10n.format("确认处理 %lld 篇", "Confirm %lld articles", [selected.count])
     }
 }
 
@@ -1030,7 +1030,7 @@ private struct AgentScopePickerView: View {
                             ForEach(feeds) { feed in
                                 choiceRow(
                                     title: feed.title,
-                                    subtitle: I18N.localizedFormat("%lld 篇未读", arguments: [feed.unreadCount]),
+                                    subtitle: AgentL10n.format("%lld 篇未读", "%lld unread", [feed.unreadCount]),
                                     selected: selectedFeeds.contains(feed.id)
                                 ) {
                                     toggle(feed.id, in: &selectedFeeds)
@@ -1040,7 +1040,7 @@ private struct AgentScopePickerView: View {
                             ForEach(folders) { folder in
                                 choiceRow(
                                     title: folder.title,
-                                    subtitle: I18N.localizedFormat("%lld 篇未读", arguments: [folder.unreadCount]),
+                                    subtitle: AgentL10n.format("%lld 篇未读", "%lld unread", [folder.unreadCount]),
                                     selected: selectedFolders.contains(folder.id)
                                 ) {
                                     toggle(folder.id, in: &selectedFolders)
@@ -1060,7 +1060,7 @@ private struct AgentScopePickerView: View {
             }
             .pickerStyle(.menu)
 
-            Text(I18N.localizedFormat("预计 %lld 篇未读", arguments: [previewCount]))
+            Text(AgentL10n.format("预计 %lld 篇未读", "About %lld unread", [previewCount]))
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
 
@@ -1155,7 +1155,7 @@ private struct AgentDigestCard: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(I18N.shared.localized("未读分析", "Unread triage"))
                     .font(.system(size: 13, weight: .semibold))
-                Text(I18N.localizedFormat("%lld 篇 → %lld 个主题", arguments: [digest.unreadCount, digest.items.count]))
+                Text(AgentL10n.format("%lld 篇 → %lld 个主题", "%lld articles → %lld topics", [digest.unreadCount, digest.items.count]))
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -1176,7 +1176,7 @@ private struct AgentDigestCard: View {
                     onApplySkippable()
                 } label: {
                     HStack {
-                        Text(I18N.localizedFormat("把可跳过的 %lld 篇标已读", arguments: [skippable.count]))
+                        Text(AgentL10n.format("把可跳过的 %lld 篇标已读", "Mark %lld skippable as read", [skippable.count]))
                         Spacer()
                         Image(systemName: "checkmark.circle")
                     }
@@ -1220,7 +1220,7 @@ private struct AgentDigestCard: View {
                             .font(.system(size: 11, weight: .medium))
                             .lineLimit(2)
                         if item.clusterSize > 1 {
-                            Text(I18N.localizedFormat("同题 %lld", arguments: [item.clusterSize]))
+                            Text(AgentL10n.format("同题 %lld", "%lld same story", [item.clusterSize]))
                                 .font(.system(size: 8))
                                 .padding(.horizontal, 4)
                                 .padding(.vertical, 1)

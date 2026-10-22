@@ -95,7 +95,9 @@ struct AgentActionHistoryView: View {
         default:
             verb = action.tool
         }
-        return "\(verb) · \(action.affectedIDs.count) 篇"
+        return I18N.shared.isEnglish
+            ? "\(verb) · \(action.affectedIDs.count) articles"
+            : "\(verb) · \(action.affectedIDs.count) 篇"
     }
 
     private func canUndo(_ action: AgentAction) -> Bool {
