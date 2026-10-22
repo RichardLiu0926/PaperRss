@@ -70,6 +70,10 @@ struct PaperRssApp: App {
             CommandGroup(after: .newItem) {
                 Button(I18N.localized("刷新全部订阅")) { Task { await store.refresh() } }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
+                Button(I18N.localized("AI 助手", englishFallback: "AI Assistant")) {
+                    navigation.openAgent()
+                }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
             }
             CommandGroup(after: .textFormatting) {
                 Button(I18N.localized("放大正文字号")) {

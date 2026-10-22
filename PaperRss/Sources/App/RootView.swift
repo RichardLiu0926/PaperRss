@@ -272,6 +272,7 @@ struct RootView: View {
     @State private var renamingFolder: FolderIdentifiable? = nil
     @State private var renamingFeed: Feed? = nil
     @State private var showsSettings = false
+    @State private var showsAgentPanel = false
     @State private var showsImporter = false
     @State private var showsExporter = false
     @State private var isZenMode = false
@@ -310,14 +311,21 @@ struct RootView: View {
                 store.iconStore.warmUp(feeds: feeds)
             }
             .onReceive(navigation.$request.compactMap { $0 }) { request in
-                guard request.destination == .unread else { return }
-                cancelNavigationConfirmation(dismissToast: true)
-                selection = .unread
-                timelineMemory.resetScope()
-                isTimelineBrowsing = timelineStyle != .list
-                selectedEntryID = nil
-                retainedEntryListIDs.removeAll()
-                autoScrollTrigger = UUID()
+                switch request.destination {
+                case .unread:
+                    cancelNavigationConfirmation(dismissToast: true)
+                    selection = .unread
+                    timelineMemory.resetScope()
+                    isTimelineBrowsing = timelineStyle != .list
+                    selectedEntryID = nil
+                    retainedEntryListIDs.removeAll()
+                    autoScrollTrigger = UUID()
+                case .agent:
+                    toggleAgentPanel()
+                }
+            }
+            .onChange(of: showsSettings) { _, isShowing in
+                if isShowing { showsAgentPanel = false }
             }
             .onChange(of: isZenMode) { _, newZenMode in
                 if newZenMode {
@@ -529,6 +537,18 @@ struct RootView: View {
             columnFocusState: columnFocusState
         )
         .ignoresSafeArea()
+        .inspector(isPresented: $showsAgentPanel) {
+            AgentPanelView(
+                store: store,
+                onClose: { showsAgentPanel = false },
+                onOpenEntry: { selectedEntryID = $0 },
+                onOpenSettings: {
+                    showsAgentPanel = false
+                    showsSettings = true
+                }
+            )
+            .inspectorColumnWidth(min: 340, ideal: 400, max: 520)
+        }
         .tint(appearanceAccentColor)
         .accentColor(appearanceAccentColor)
         #else
@@ -705,6 +725,16 @@ struct RootView: View {
             store.markAllRead(feedID: id)
         case let .feeds(ids):
             store.markAllRead(feedIDs: ids)
+        }
+    }
+
+    private func toggleAgentPanel() {
+        guard store.aiSettings.configuration(for: .agent)?.isEnabled == true else {
+            showsSettings = true
+            return
+        }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            showsAgentPanel.toggle()
         }
     }
 

@@ -1386,6 +1386,12 @@ struct SettingsView: View {
                     }
                 }
 
+                aiFeatureSection(I18N.shared.localized("助手", "Assistant")) {
+                    LazyVGrid(columns: aiFeatureColumns, alignment: .leading, spacing: 16) {
+                        featureConfigurationRow(.agent)
+                    }
+                }
+
                 aiFeatureSection(I18N.shared.localized("划词能力", "Selection Features")) {
                     LazyVGrid(columns: aiFeatureColumns, alignment: .leading, spacing: 16) {
                         featureConfigurationRow(.selectionTranslation)

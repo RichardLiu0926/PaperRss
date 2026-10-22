@@ -6,6 +6,7 @@ final class AppNavigationModel: ObservableObject {
 
     enum Destination: Equatable {
         case unread
+        case agent
     }
 
     struct Request: Identifiable, Equatable {
@@ -17,5 +18,9 @@ final class AppNavigationModel: ObservableObject {
 
     func openUnread() {
         request = Request(destination: .unread)
+    }
+
+    func openAgent() {
+        request = Request(destination: .agent)
     }
 }

@@ -21,8 +21,7 @@ private final class ControllerMockPort: AIModelPort, @unchecked Sendable {
     }
 }
 
-private final class ToolLoopPort: AIModelPort, @unchecked Sendable {
-    private let lock = NSLock()
+private actor ToolLoopPort: AIModelPort {
     private var calls = 0
 
     func data(for request: URLRequest) async throws -> AIModelHTTPResponse {
@@ -30,10 +29,8 @@ private final class ToolLoopPort: AIModelPort, @unchecked Sendable {
     }
 
     func events(for request: URLRequest) async throws -> AIModelEventResponse {
-        lock.lock()
         let index = calls
         calls += 1
-        lock.unlock()
         let lines: [String]
         if index == 0 {
             lines = [
