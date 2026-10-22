@@ -72,6 +72,12 @@ public final class AgentDigestCache: Sendable {
             isComplete: true
         )
         try database.write { db in
+            try repository.deleteGlobalArtifacts(
+                subjectKey: key.subjectKey,
+                kind: AIArtifactKind.triage.rawValue,
+                contentHash: key.contentHash,
+                in: db
+            )
             try repository.saveArtifactModel(artifact, accountID: nil, in: db)
         }
     }

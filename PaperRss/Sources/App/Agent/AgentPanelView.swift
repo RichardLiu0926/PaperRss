@@ -378,6 +378,7 @@ struct AgentPanelView: View {
         }
         .background(PaperTheme.surface(.articleList, scheme: colorScheme))
         .overlay(alignment: .leading) { Divider().opacity(0.5) }
+        .onExitCommand(perform: onClose)
         .onAppear {
             model.start()
             DispatchQueue.main.async { composerFocused = true }
@@ -424,6 +425,7 @@ struct AgentPanelView: View {
             }
             .buttonStyle(.plain)
             .help(I18N.shared.localized("关闭助手", "Close assistant"))
+            .accessibilityLabel(I18N.shared.localized("关闭助手", "Close assistant"))
         }
         .padding(.horizontal, 14)
         .frame(height: 48)
@@ -448,6 +450,7 @@ struct AgentPanelView: View {
                 .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(I18N.shared.localized("分析范围", "Analysis scope"))
             .popover(isPresented: $showsScopePicker, arrowEdge: .bottom) {
                 AgentScopePickerView(
                     current: model.scope,
@@ -477,6 +480,7 @@ struct AgentPanelView: View {
                 }
                 .buttonStyle(.borderless)
                 .font(.system(size: 10))
+                .accessibilityLabel(I18N.shared.localized("停止分析", "Stop analysis"))
             } else if model.configuration != nil && model.scopeCount > 0 {
                 Button {
                     model.analyzeUnread()
@@ -512,6 +516,7 @@ struct AgentPanelView: View {
             }
             .buttonStyle(.borderless)
             .font(.system(size: 11, weight: .semibold))
+            .accessibilityLabel(I18N.shared.localized("撤销上一次标记", "Undo the last change"))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -746,6 +751,7 @@ struct AgentPanelView: View {
                     .font(.system(size: 12))
                     .scrollContentBackground(.hidden)
                     .focused($composerFocused)
+                    .accessibilityLabel(I18N.shared.localized("给 AI 助手发消息", "Message the AI assistant"))
                     .frame(minHeight: 44, maxHeight: 100)
                     .padding(4)
             }
@@ -774,6 +780,7 @@ struct AgentPanelView: View {
                 .disabled(!model.canSend)
                 .keyboardShortcut(.return, modifiers: [.command])
                 .help(I18N.shared.localized("发送（⌘↩）", "Send (⌘↩)"))
+                .accessibilityLabel(I18N.shared.localized("发送", "Send"))
             }
         }
         .padding(.horizontal, 12)
@@ -850,6 +857,7 @@ private struct AgentWriteConfirmationView: View {
                                     .foregroundStyle(selected.contains(item.id) ? PaperTheme.warmAccent : .secondary)
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel(item.title)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(item.title)
                                     .font(.system(size: 12))

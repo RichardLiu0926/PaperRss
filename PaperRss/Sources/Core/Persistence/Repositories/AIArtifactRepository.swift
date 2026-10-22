@@ -59,6 +59,24 @@ public final class AIArtifactRepository: Sendable {
         _ = try AIArtifactRecord.filter(Column("id") == id).deleteAll(db)
     }
 
+    /// Removes cached global artifacts for one cache key. The triage cache uses
+    /// this before inserting a fresh result so repeated "analyze again" runs do
+    /// not accumulate rows.
+    public func deleteGlobalArtifacts(
+        subjectKey: String,
+        kind: String,
+        contentHash: String,
+        in db: Database
+    ) throws {
+        _ = try AIArtifactRecord
+            .filter(
+                Column("subject_key") == subjectKey &&
+                Column("kind") == kind &&
+                Column("content_hash") == contentHash
+            )
+            .deleteAll(db)
+    }
+
     // MARK: - Domain AIArtifact Helpers
 
     public func fetchLatestArtifactModel(

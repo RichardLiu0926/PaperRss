@@ -15,6 +15,7 @@ PaperRss 会在本机保存运行所需的数据，包括：
 - 已读、未读、星标、文件夹等阅读状态；
 - Feed 正文、按需提取的网页正文、图片地址及相关缓存；
 - AI 摘要、翻译、划词解释和问答结果；
+- AI 助手的会话、工具调用结果、未读分析缓存与操作记录（仅本机，不参与 iCloud 同步）；
 - 应用偏好、刷新设置和 AI 服务配置；
 - FreshRSS / Miniflux 等用户主动添加的服务账户信息。
 
@@ -24,6 +25,7 @@ PaperRss stores data needed to operate locally, including:
 - read, unread, starred, and folder state;
 - feed content, on-demand extracted web content, image URLs, and related caches;
 - AI summaries, translations, selection explanations, and answers;
+- assistant conversations, tool results, unread-triage caches, and write activity logs (local only; not synchronized through iCloud);
 - app preferences, refresh settings, and AI service configuration; and
 - account information for services such as FreshRSS or Miniflux that you choose to add.
 
@@ -47,14 +49,14 @@ Extracted article caches are stored in the local database and can be cleared fro
 
 1. **订阅源及原网站**：刷新 Feed、读取图标、加载文章图片；当 Feed 内容不足且用户打开文章时，可能请求公开的原文章页面并在本地提取正文。网站运营者会正常看到用户 IP、请求时间和请求头。
 2. **FreshRSS / Miniflux 或兼容服务**：同步订阅、文章及阅读状态。相关服务按其自身隐私政策处理数据。
-3. **用户选择的 AI 服务**：只有在用户配置接口并主动使用 AI 功能时才会发起请求。根据功能不同，请求可能包含文章标题、文章正文或其片段、选中文字、附近段落、用户问题、自定义 Prompt 和目标语言。开启「标题翻译」后，列表滚动可见的文章标题与摘要会按需发送给模型（无需打开文章）；可以随时在功能配置中关闭。模型服务商会按其条款与隐私政策处理这些内容。
+3. **用户选择的 AI 服务**：只有在用户配置接口并主动使用 AI 功能时才会发起请求。根据功能不同，请求可能包含文章标题、文章正文或其片段、选中文字、附近段落、用户问题、自定义 Prompt 和目标语言。使用 AI 助手时，请求还可能包含当前分析范围的标题/摘要/正文片段、工具参数与工具结果；使用本地模型端点时这些内容不出本机，使用远端供应商时按其条款处理。开启「标题翻译」后，列表滚动可见的文章标题与摘要会按需发送给模型（无需打开文章）；可以随时在功能配置中关闭。模型服务商会按其条款与隐私政策处理这些内容。
 4. **GitHub/Sparkle 更新来源**：检查更新和下载用户选择安装的新版本。
 
 Depending on your configuration and actions, the PaperRss client may connect directly to:
 
 1. **Feed and publisher servers** to refresh feeds, retrieve icons, and load article images. If a feed does not provide sufficient content and you open an article, PaperRss may request the publicly accessible article page and extract readable content locally. The publisher will ordinarily receive your IP address, request time, and request headers.
 2. **FreshRSS / Miniflux or compatible services** to synchronize subscriptions, entries, and reading state. Those services process data under their own privacy policies.
-3. **Your selected AI provider**, only after you configure an endpoint and invoke an AI feature. Depending on the feature, a request may include the article title, all or part of the article text, selected text, nearby paragraphs, your question, custom prompt, and target language. When “Title Translation” is enabled, titles and summaries visible while scrolling the timeline are sent to the model on demand without opening the article; you can disable it at any time under Feature Routing. The provider processes this data under its own terms and privacy policy.
+3. **Your selected AI provider**, only after you configure an endpoint and invoke an AI feature. Depending on the feature, a request may include the article title, all or part of the article text, selected text, nearby paragraphs, your question, custom prompt, and target language. When you use the assistant, requests may also include titles/summaries/content within the selected scope and tool arguments/results; with a local model endpoint this content stays on your Mac, while a remote provider processes it under its terms. When “Title Translation” is enabled, titles and summaries visible while scrolling the timeline are sent to the model on demand without opening the article; you can disable it at any time under Feature Routing. The provider processes this data under its own terms and privacy policy.
 4. **GitHub/Sparkle update sources** to check for updates and download a version you choose to install.
 
 在提交保密、付费、受访问限制或含敏感个人信息的内容给第三方 AI 服务前，请先确认你有权这样做，并审查服务商的数据保留与训练政策。

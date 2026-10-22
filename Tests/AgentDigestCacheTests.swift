@@ -83,6 +83,20 @@ final class AgentDigestCacheTests: XCTestCase {
         ))
     }
 
+    func testCacheKeepsOneRowPerKey() throws {
+        let value = digest()
+        try cache.save(value, accountID: "local-default", configuration: configuration, maximumArticles: 30, deepReadLimit: 5)
+        try cache.save(value, accountID: "local-default", configuration: configuration, maximumArticles: 30, deepReadLimit: 5)
+        let count = try database.read { db in
+            try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM ai_artifacts WHERE kind = ? AND subject_key LIKE 'agent-digest-v1:%'",
+                arguments: [AIArtifactKind.triage.rawValue]
+            ) ?? 0
+        }
+        XCTAssertEqual(count, 1)
+    }
+
     func testCacheExpiresAfterOneHour() throws {
         let value = digest()
         try cache.save(value, accountID: "local-default", configuration: configuration, maximumArticles: 30, deepReadLimit: 5)
