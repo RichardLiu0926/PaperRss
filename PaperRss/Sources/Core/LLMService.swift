@@ -479,32 +479,285 @@ public struct LLMService: Sendable {
         if !(configuration.usesGeminiAPI && normalizedModel.lowercased().hasPrefix("gemini-3")) {
             body["temperature"] = overrideTemperature ?? configuration.temperature
         }
+        try applyReasoningParameters(
+            to: &body,
+            configuration: configuration,
+            forceDisableReasoning: forceDisableReasoning
+        )
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return request
+    }
+
+    private func applyReasoningParameters(
+        to body: inout [String: Any],
+        configuration: LLMConfiguration,
+        forceDisableReasoning: Bool = false
+    ) throws {
         let capability = configuration.reasoningCapabilities
         let mode = forceDisableReasoning && capability.canDisable ? "关闭" : AIReasoningCapabilities.canonical(configuration.reasoningMode)
         // 无效旧选项必须显式重选，不能在界面显示关闭、请求却自动开启。
         guard mode == "自动" || capability.accepts(mode) else { throw LLMServiceError.unsupportedReasoning }
-        if mode != "自动" {
-            let off = mode == "关闭"
-            let effort = mode == "开启" || off ? nil : mode
-            switch capability.wireProtocol {
-            case .deepSeek:
-                body["thinking"] = ["type": off ? "disabled" : "enabled"]
-                body["reasoning_effort"] = effort
-            case .gemini: body["reasoning_effort"] = off ? "none" : effort
-            case .dashscope:
-                body["enable_thinking"] = !off
-                body["reasoning_effort"] = effort
-            case .openRouter:
-                var reasoning: [String: Any] = ["enabled": !off]
-                reasoning["effort"] = effort
-                body["reasoning"] = reasoning
-                body["provider"] = ["require_parameters": true]
-            case .openAI: body["reasoning_effort"] = effort
-            case .automatic: break
+        guard mode != "自动" else { return }
+        let off = mode == "关闭"
+        let effort = mode == "开启" || off ? nil : mode
+        switch capability.wireProtocol {
+        case .deepSeek:
+            body["thinking"] = ["type": off ? "disabled" : "enabled"]
+            body["reasoning_effort"] = effort
+        case .gemini: body["reasoning_effort"] = off ? "none" : effort
+        case .dashscope:
+            body["enable_thinking"] = !off
+            body["reasoning_effort"] = effort
+        case .openRouter:
+            var reasoning: [String: Any] = ["enabled": !off]
+            reasoning["effort"] = effort
+            body["reasoning"] = reasoning
+            body["provider"] = ["require_parameters": true]
+        case .openAI: body["reasoning_effort"] = effort
+        case .automatic: break
+        }
+    }
+
+    // MARK: - Multi-turn chat with tools
+
+    /// Multi-turn OpenAI-compatible chat. This is the transport used by the
+    /// local assistant: it preserves assistant tool calls and tool results so a
+    /// provider can continue the same turn instead of re-sending a flattened
+    /// prompt. Content deltas are forwarded through `onDelta`; tool-call deltas
+    /// are accumulated and returned once the stream finishes.
+    public func chat(
+        messages: [AgentChatMessage],
+        tools: [AgentToolDefinition] = [],
+        configuration: LLMConfiguration,
+        apiKey: String,
+        onDelta: (@Sendable (String) async -> Void)? = nil
+    ) async throws -> AgentChatCompletion {
+        guard !configuration.usesTranslationAdaptation else { throw LLMServiceError.translationOnly }
+        let request = try makeChatRequest(
+            messages: messages,
+            tools: tools,
+            configuration: configuration,
+            apiKey: apiKey,
+            stream: onDelta != nil
+        )
+        if let onDelta {
+            do {
+                return try await streamChat(request: request, onDelta: onDelta)
+            } catch LLMServiceError.emptyResponse {
+                // Some OpenAI-compatible servers accept `stream: true` but
+                // answer with a normal JSON completion. Retry only that case.
+                let fallback = try makeChatRequest(
+                    messages: messages,
+                    tools: tools,
+                    configuration: configuration,
+                    apiKey: apiKey,
+                    stream: false
+                )
+                let result = try await nonStreamingChat(request: fallback)
+                if !result.content.isEmpty { await onDelta(result.content) }
+                return result
             }
         }
+        return try await nonStreamingChat(request: request)
+    }
+
+    func makeChatRequest(
+        messages: [AgentChatMessage],
+        tools: [AgentToolDefinition],
+        configuration: LLMConfiguration,
+        apiKey: String,
+        stream: Bool
+    ) throws -> URLRequest {
+        guard var base = URLComponents(string: configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw LLMServiceError.invalidBaseURL }
+        try validateEndpoint(base, allowInsecureLocalEndpoint: configuration.allowInsecureLocalEndpoint)
+        let root = base.path.hasSuffix("/") ? String(base.path.dropLast()) : base.path
+        base.path = root + "/chat/completions"
+        guard let url = base.url else { throw LLMServiceError.invalidBaseURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 90
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+
+        let normalizedModel = normalizedModelID(configuration.model, configuration: configuration)
+        var body: [String: Any] = [
+            "model": normalizedModel,
+            "stream": stream,
+            "messages": messages.map(chatMessageObject)
+        ]
+        if !(configuration.usesGeminiAPI && normalizedModel.lowercased().hasPrefix("gemini-3")) {
+            body["temperature"] = configuration.temperature
+        }
+        if !tools.isEmpty {
+            body["tools"] = tools.map { tool -> [String: Any] in
+                [
+                    "type": "function",
+                    "function": [
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.schemaObject
+                    ]
+                ]
+            }
+            body["tool_choice"] = "auto"
+        }
+        try applyReasoningParameters(to: &body, configuration: configuration)
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
+    }
+
+    private func chatMessageObject(_ message: AgentChatMessage) -> [String: Any] {
+        switch message.role {
+        case .tool:
+            return [
+                "role": "tool",
+                "tool_call_id": message.toolCallID ?? "",
+                "content": message.content
+            ]
+        case .assistant:
+            var object: [String: Any] = ["role": "assistant", "content": message.content]
+            if !message.toolCalls.isEmpty {
+                object["tool_calls"] = message.toolCalls.map { call -> [String: Any] in
+                    [
+                        "id": call.id,
+                        "type": "function",
+                        "function": ["name": call.name, "arguments": call.arguments]
+                    ]
+                }
+            }
+            return object
+        case .system, .user:
+            return ["role": message.role.rawValue, "content": message.content]
+        }
+    }
+
+    private struct ChatResponseEnvelope: Decodable {
+        struct Choice: Decodable {
+            struct Message: Decodable {
+                struct ToolCall: Decodable {
+                    struct Function: Decodable {
+                        let name: String?
+                        let arguments: String?
+                    }
+                    let id: String?
+                    let type: String?
+                    let function: Function?
+                }
+                let content: String?
+                let tool_calls: [ToolCall]?
+            }
+            let message: Message
+            let finish_reason: String?
+        }
+        let choices: [Choice]
+    }
+
+    private func nonStreamingChat(request: URLRequest) async throws -> AgentChatCompletion {
+        let response = try await port.data(for: request)
+        try validate(statusCode: response.statusCode, data: response.data, headers: response.headers)
+        guard let envelope = try? JSONDecoder().decode(ChatResponseEnvelope.self, from: response.data),
+              let choice = envelope.choices.first else {
+            throw LLMServiceError.invalidResponse
+        }
+        let content = (choice.message.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let calls = (choice.message.tool_calls ?? []).enumerated().compactMap { index, raw -> AgentToolCall? in
+            guard let name = raw.function?.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !name.isEmpty else { return nil }
+            let arguments = raw.function?.arguments?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return AgentToolCall(
+                id: raw.id?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "call_\(index)",
+                name: name,
+                arguments: arguments.isEmpty ? "{}" : arguments
+            )
+        }
+        if choice.finish_reason == "length", calls.isEmpty { throw LLMServiceError.truncatedResponse }
+        guard !content.isEmpty || !calls.isEmpty else { throw LLMServiceError.emptyResponse }
+        return AgentChatCompletion(content: content, toolCalls: calls, finishReason: choice.finish_reason)
+    }
+
+    private struct ChatStreamEnvelope: Decodable {
+        struct Choice: Decodable {
+            struct Delta: Decodable {
+                struct ToolCall: Decodable {
+                    struct Function: Decodable {
+                        let name: String?
+                        let arguments: String?
+                    }
+                    let index: Int?
+                    let id: String?
+                    let type: String?
+                    let function: Function?
+                }
+                let content: String?
+                let tool_calls: [ToolCall]?
+            }
+            let delta: Delta
+            let finish_reason: String?
+        }
+        let choices: [Choice]
+    }
+
+    private struct PartialToolCall {
+        var id: String?
+        var name = ""
+        var arguments = ""
+    }
+
+    private func streamChat(
+        request: URLRequest,
+        onDelta: @Sendable (String) async -> Void
+    ) async throws -> AgentChatCompletion {
+        let response = try await port.events(for: request)
+        guard (200...299).contains(response.statusCode) else {
+            if response.statusCode == 401 || response.statusCode == 403 { throw LLMServiceError.authenticationFailed }
+            if response.statusCode == 429 { throw Self.rateLimitError(headers: response.headers) }
+            throw LLMServiceError.httpStatus(response.statusCode, "")
+        }
+        var output = ""
+        var finishReason: String?
+        var partials: [Int: PartialToolCall] = [:]
+        for try await line in response.lines {
+            guard line.hasPrefix("data:") else { continue }
+            let value = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if value == "[DONE]" { break }
+            guard let data = value.data(using: .utf8),
+                  let chunk = try? JSONDecoder().decode(ChatStreamEnvelope.self, from: data),
+                  let choice = chunk.choices.first else { continue }
+            if let delta = choice.delta.content, !delta.isEmpty {
+                output += delta
+                await onDelta(delta)
+            }
+            for call in choice.delta.tool_calls ?? [] {
+                let index = call.index ?? partials.count
+                var partial = partials[index] ?? PartialToolCall()
+                if let id = call.id?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty {
+                    partial.id = id
+                }
+                if let name = call.function?.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !name.isEmpty, partial.name.isEmpty {
+                    partial.name = name
+                }
+                if let arguments = call.function?.arguments {
+                    partial.arguments += arguments
+                }
+                partials[index] = partial
+            }
+            if let reason = choice.finish_reason { finishReason = reason }
+        }
+        let calls = partials.keys.sorted().compactMap { index -> AgentToolCall? in
+            guard let partial = partials[index], !partial.name.isEmpty else { return nil }
+            return AgentToolCall(
+                id: partial.id ?? "call_\(index)",
+                name: partial.name,
+                arguments: partial.arguments.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "{}" : partial.arguments
+            )
+        }
+        if finishReason == "length", calls.isEmpty { throw LLMServiceError.truncatedResponse }
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !calls.isEmpty else { throw LLMServiceError.emptyResponse }
+        return AgentChatCompletion(content: trimmed, toolCalls: calls, finishReason: finishReason)
     }
 
     func makeTranslationRequest(paragraph: String, configuration: LLMConfiguration, apiKey: String) throws -> URLRequest {
@@ -1076,4 +1329,9 @@ public enum ArticleChunker {
         \(ending)
         """
     }
+}
+
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

@@ -239,6 +239,8 @@ public final class AppStore: ObservableObject {
     private var automaticallyActivatedEntryIDs: Set<String> = []
     public let languageDetectionService = LanguageDetectionService()
     public var autoTranslationRepository: AutoTranslationRepository { .init(database: libraryDatabase) }
+    public var agentSessionRepository: AgentSessionRepository { .init(database: libraryDatabase) }
+    public var agentActionRepository: AgentActionRepository { .init(database: libraryDatabase) }
 
     public var bilingualTargetLanguage: String {
         aiSettings.resolvedConfiguration(for: .bilingualTranslation)?.targetLanguage ?? aiSettings.features.targetLanguage

@@ -1684,6 +1684,7 @@ struct SettingsView: View {
         case .selectionTranslation: "text.magnifyingglass"
         case .selectionExplanation: "text.book.closed"
         case .selectionAsk: "questionmark.bubble"
+        case .agent: "sparkles"
         }
     }
 
@@ -1729,6 +1730,7 @@ struct SettingsView: View {
         case .selectionTranslation: I18N.shared.localized("划词翻译", "Selection Translation")
         case .selectionExplanation: I18N.shared.localized("划词解释", "Selection Explanation")
         case .selectionAsk: I18N.shared.localized("划词提问", "Selection Q&A")
+        case .agent: I18N.shared.localized("AI 助手", "AI Assistant")
         }
     }
 
@@ -1740,6 +1742,7 @@ struct SettingsView: View {
         case .selectionTranslation: I18N.shared.localized("翻译阅读器中选中的文字。", "Translate selected text in the reader.")
         case .selectionExplanation: I18N.shared.localized("结合上下文解释选中的内容。", "Explain selected text using its context.")
         case .selectionAsk: I18N.shared.localized("围绕选中内容继续提问。", "Ask follow-up questions about selected text.")
+        case .agent: I18N.shared.localized("按范围分析未读，并在确认后标记阅读状态。", "Triage unread articles by scope and mark read state after confirmation.")
         }
     }
 

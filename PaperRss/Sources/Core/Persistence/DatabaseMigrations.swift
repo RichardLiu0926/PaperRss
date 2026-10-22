@@ -771,6 +771,59 @@ public enum DatabaseMigrations {
             }
         }
 
+        migrator.registerMigration("v25-agent-sessions") { db in
+            try db.execute(sql: """
+            CREATE TABLE agent_sessions (
+                id              TEXT PRIMARY KEY NOT NULL,
+                title           TEXT NOT NULL DEFAULT '',
+                scope_json      TEXT NOT NULL DEFAULT '{}',
+                provider_id     TEXT,
+                model_id        TEXT,
+                created_at      REAL NOT NULL,
+                updated_at      REAL NOT NULL,
+                is_archived     INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX idx_agent_sessions_updated
+            ON agent_sessions(is_archived, updated_at DESC);
+
+            CREATE TABLE agent_messages (
+                id              TEXT PRIMARY KEY NOT NULL,
+                session_id      TEXT NOT NULL,
+                role            TEXT NOT NULL,
+                content         TEXT NOT NULL DEFAULT '',
+                tool_calls_json TEXT,
+                tool_call_id    TEXT,
+                created_at      REAL NOT NULL,
+                char_count      INTEGER NOT NULL DEFAULT 0,
+
+                CHECK (role IN ('system', 'user', 'assistant', 'tool')),
+                FOREIGN KEY(session_id)
+                    REFERENCES agent_sessions(id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE INDEX idx_agent_messages_session
+            ON agent_messages(session_id, created_at);
+
+            CREATE TABLE agent_action_log (
+                id                  TEXT PRIMARY KEY NOT NULL,
+                session_id          TEXT,
+                message_id          TEXT,
+                tool                TEXT NOT NULL,
+                args_json           TEXT NOT NULL DEFAULT '{}',
+                affected_ids_json   TEXT NOT NULL DEFAULT '[]',
+                prior_states_json   TEXT NOT NULL DEFAULT '{}',
+                status              TEXT NOT NULL,
+                created_at          REAL NOT NULL,
+                undone_at           REAL
+            );
+
+            CREATE INDEX idx_agent_action_log_created
+            ON agent_action_log(created_at DESC);
+            """)
+        }
+
         return migrator
     }
 

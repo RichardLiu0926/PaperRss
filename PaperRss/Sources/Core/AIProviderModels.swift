@@ -37,6 +37,9 @@ public enum AIFeatureKind: String, Codable, CaseIterable, Sendable {
     case selectionTranslation
     case selectionExplanation
     case selectionAsk
+    /// 召唤式未读分析助手。默认关闭，模型复用现有供应商配置；
+    /// 是否出现在工具栏由设置中的功能位决定。
+    case agent
 }
 
 public struct AIModelReference: Codable, Hashable, Sendable {
@@ -561,9 +564,9 @@ public struct AISettings: Codable, Hashable, Sendable {
         features: .default,
         featureConfigurations: Dictionary(uniqueKeysWithValues: AIFeatureKind.allCases.map {
             ($0, AIFeatureConfiguration(
-                // 标题翻译会把列表标题发送给模型，新装也默认关闭，
-                // 由用户在功能配置中显式打开。
-                isEnabled: $0 != .titleTranslation,
+                // 标题翻译会把列表标题发送给模型；助手会读文章并在确认后写
+                // 状态。两者新装默认关闭，由用户显式打开。
+                isEnabled: $0 != .titleTranslation && $0 != .agent,
                 model: AIModelReference(providerID: AIProviderID.deepSeek, modelID: "deepseek-v4-flash"),
                 reasoningMode: $0 == .bilingualTranslation || $0 == .titleTranslation || $0 == .selectionTranslation ? "关闭" : "自动"
             ))
@@ -884,6 +887,8 @@ public struct AISettings: Codable, Hashable, Sendable {
         case .selectionTranslation: features.showsSelectionTranslation
         case .selectionExplanation: features.showsSelectionExplanation
         case .selectionAsk: features.showsSelectionAsk
+        // 助手是新增的写能力入口，老设置缺失该配置时保持关闭。
+        case .agent: false
         }
     }
 

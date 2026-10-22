@@ -41,6 +41,9 @@ final class DatabaseSchemaTests: XCTestCase {
             "translation_article_exemptions",
             "source_language_hints",
             "translation_feed_lists",
+            "agent_sessions",
+            "agent_messages",
+            "agent_action_log",
             "icloud_sync_scope",
             "icloud_sync_changes",
             "icloud_record_mappings",
@@ -56,7 +59,7 @@ final class DatabaseSchemaTests: XCTestCase {
             return Set(tableNames)
         }
 
-        XCTAssertEqual(existingTables, expectedTables, "数据库包含 14 张业务表及 5 张 iCloud 基础设施表")
+        XCTAssertEqual(existingTables, expectedTables, "数据库包含 17 张业务表及 5 张 iCloud 基础设施表")
     }
 
     // MARK: - B. Column Contract 结构内省
