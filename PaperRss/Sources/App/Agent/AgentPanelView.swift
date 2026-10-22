@@ -1057,6 +1057,7 @@ private struct AgentScopePickerView: View {
     @State private var selectedFeeds: Set<String>
     @State private var selectedFolders: Set<String>
     @State private var previewCount: Int
+    @State private var searchText = ""
 
     init(
         current: AgentScope,
@@ -1122,10 +1123,50 @@ private struct AgentScopePickerView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
             } else {
+                TextField(
+                    mode == .feeds
+                        ? I18N.shared.localized("搜索订阅源", "Search feeds")
+                        : I18N.shared.localized("搜索订阅源组", "Search groups"),
+                    text: $searchText
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11))
+
+                HStack(spacing: 8) {
+                    Text(AgentL10n.format(
+                        "%lld 个",
+                        "%lld items",
+                        [mode == .feeds ? filteredFeeds.count : filteredFolders.count]
+                    ))
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(I18N.shared.localized("全选", "Select all")) {
+                        if mode == .feeds {
+                            selectedFeeds.formUnion(filteredFeeds.map(\.id))
+                        } else {
+                            selectedFolders.formUnion(filteredFolders.map(\.id))
+                        }
+                        refreshPreview()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 9))
+                    Button(I18N.shared.localized("清空", "Clear")) {
+                        if mode == .feeds {
+                            selectedFeeds.removeAll()
+                        } else {
+                            selectedFolders.removeAll()
+                        }
+                        refreshPreview()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 9))
+                }
+
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         if mode == .feeds {
-                            ForEach(feeds) { feed in
+                            ForEach(filteredFeeds) { feed in
                                 choiceRow(
                                     title: feed.title,
                                     subtitle: AgentL10n.format("%lld 篇未读", "%lld unread", [feed.unreadCount]),
@@ -1135,7 +1176,7 @@ private struct AgentScopePickerView: View {
                                 }
                             }
                         } else {
-                            ForEach(folders) { folder in
+                            ForEach(filteredFolders) { folder in
                                 choiceRow(
                                     title: folder.title,
                                     subtitle: AgentL10n.format("%lld 篇未读", "%lld unread", [folder.unreadCount]),
@@ -1175,7 +1216,10 @@ private struct AgentScopePickerView: View {
         }
         .padding(14)
         .frame(width: 340)
-        .onChange(of: mode) { _, _ in refreshPreview() }
+        .onChange(of: mode) { _, _ in
+            searchText = ""
+            refreshPreview()
+        }
         .onChange(of: selectedFeeds) { _, _ in refreshPreview() }
         .onChange(of: selectedFolders) { _, _ in refreshPreview() }
         .onChange(of: timePreset) { _, _ in refreshPreview() }
@@ -1183,6 +1227,16 @@ private struct AgentScopePickerView: View {
 
     private func refreshPreview() {
         previewCount = countProvider(buildScope())
+    }
+
+    private var filteredFeeds: [AgentSourceOption] {
+        guard !searchText.isEmpty else { return feeds }
+        return feeds.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+    }
+
+    private var filteredFolders: [AgentSourceOption] {
+        guard !searchText.isEmpty else { return folders }
+        return folders.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
     }
 
     private var invalidSelection: Bool {
