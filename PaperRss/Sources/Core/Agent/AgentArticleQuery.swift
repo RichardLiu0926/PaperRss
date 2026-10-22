@@ -40,6 +40,18 @@ public struct AgentArticleSummary: Identifiable, Hashable, Sendable {
     }
 }
 
+public struct AgentFeedUnreadStat: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let title: String
+    public let unreadCount: Int
+
+    public init(id: String, title: String, unreadCount: Int) {
+        self.id = id
+        self.title = title
+        self.unreadCount = unreadCount
+    }
+}
+
 /// Composable query used by the assistant scope picker and digest pipeline.
 /// `TimelineScope` intentionally remains single-dimensional; this type adds the
 /// source × time composition without changing the reader's query contract.
@@ -103,6 +115,118 @@ public final class AgentArticleQuery: Sendable {
                 arguments: StatementArguments(arguments)
             )
             return rows.compactMap(Self.summary(from:))
+        }
+    }
+
+    public func search(
+        scope: AgentScope,
+        query: String,
+        accountID: String? = nil,
+        limit: Int = 20
+    ) throws -> [AgentArticleSummary] {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return [] }
+        let (whereClause, arguments) = Self.filter(scope: scope, accountID: accountID, search: term)
+        let boundedLimit = max(1, min(limit, 50))
+        return try database.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT
+                    i.id AS id,
+                    i.feed_id AS feed_id,
+                    i.account_id AS account_id,
+                    COALESCE(NULLIF(f.custom_title, ''), f.title) AS feed_title,
+                    COALESCE(a.title, '') AS title,
+                    a.url AS url,
+                    a.published_at AS published_at,
+                    COALESCE(a.summary, '') AS summary,
+                    COALESCE(s.is_read, 0) AS is_read,
+                    COALESCE(s.is_starred, 0) AS is_starred
+                FROM items i
+                INNER JOIN feeds f ON f.id = i.feed_id
+                LEFT JOIN articles a ON a.item_id = i.id
+                LEFT JOIN article_states s ON s.item_id = i.id
+                WHERE \(whereClause)
+                ORDER BY COALESCE(a.published_at, i.created_at) DESC, i.id DESC
+                LIMIT \(boundedLimit)
+                """,
+                arguments: StatementArguments(arguments)
+            )
+            return rows.compactMap(Self.summary(from:))
+        }
+    }
+
+    public func summary(id: String, accountID: String? = nil) throws -> AgentArticleSummary? {
+        var whereClauses = ["i.id = :id", "f.is_deleted = 0"]
+        var arguments: [String: (any DatabaseValueConvertible)?] = ["id": id]
+        if let accountID {
+            whereClauses.append("i.account_id = :account_id")
+            arguments["account_id"] = accountID
+        }
+        return try database.read { db in
+            let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT
+                    i.id AS id,
+                    i.feed_id AS feed_id,
+                    i.account_id AS account_id,
+                    COALESCE(NULLIF(f.custom_title, ''), f.title) AS feed_title,
+                    COALESCE(a.title, '') AS title,
+                    a.url AS url,
+                    a.published_at AS published_at,
+                    COALESCE(a.summary, '') AS summary,
+                    COALESCE(s.is_read, 0) AS is_read,
+                    COALESCE(s.is_starred, 0) AS is_starred
+                FROM items i
+                INNER JOIN feeds f ON f.id = i.feed_id
+                LEFT JOIN articles a ON a.item_id = i.id
+                LEFT JOIN article_states s ON s.item_id = i.id
+                WHERE \(whereClauses.joined(separator: " AND "))
+                LIMIT 1
+                """,
+                arguments: StatementArguments(arguments)
+            )
+            return row.flatMap(Self.summary(from:))
+        }
+    }
+
+    public func unreadCountsByFeed(
+        scope: AgentScope,
+        accountID: String? = nil,
+        limit: Int = 100
+    ) throws -> [AgentFeedUnreadStat] {
+        let (whereClause, arguments) = Self.filter(
+            scope: AgentScope(source: scope.source, from: scope.from, to: scope.to, unreadOnly: true),
+            accountID: accountID
+        )
+        return try database.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT
+                    f.id AS id,
+                    COALESCE(NULLIF(f.custom_title, ''), f.title) AS title,
+                    COUNT(DISTINCT i.id) AS unread
+                FROM items i
+                INNER JOIN feeds f ON f.id = i.feed_id
+                LEFT JOIN articles a ON a.item_id = i.id
+                LEFT JOIN article_states s ON s.item_id = i.id
+                WHERE \(whereClause)
+                GROUP BY f.id
+                ORDER BY unread DESC, title COLLATE NOCASE ASC
+                LIMIT \(max(1, min(limit, 200)))
+                """,
+                arguments: StatementArguments(arguments)
+            )
+            return rows.map { row in
+                AgentFeedUnreadStat(
+                    id: row["id"],
+                    title: HTMLTextDecoder.decoded(row["title"]),
+                    unreadCount: row["unread"]
+                )
+            }
         }
     }
 
@@ -187,7 +311,8 @@ public final class AgentArticleQuery: Sendable {
 
     private static func filter(
         scope: AgentScope,
-        accountID: String?
+        accountID: String?,
+        search: String? = nil
     ) -> (String, [String: (any DatabaseValueConvertible)?]) {
         var whereClauses = ["f.is_deleted = 0"]
         var arguments: [String: (any DatabaseValueConvertible)?] = [:]
@@ -240,6 +365,13 @@ public final class AgentArticleQuery: Sendable {
         }
         if scope.unreadOnly {
             whereClauses.append("COALESCE(s.is_read, 0) = 0")
+        }
+        if let search, !search.isEmpty {
+            arguments["search"] = search
+            whereClauses.append("""
+            (INSTR(LOWER(COALESCE(a.title, '')), LOWER(:search)) > 0
+             OR INSTR(LOWER(COALESCE(a.summary, '')), LOWER(:search)) > 0)
+            """)
         }
         return (whereClauses.joined(separator: " AND "), arguments)
     }
