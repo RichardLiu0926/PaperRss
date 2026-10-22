@@ -83,6 +83,14 @@ final class AgentDigestCacheTests: XCTestCase {
         ))
     }
 
+    func testMarkingClusterReadUpdatesItemAndUnreadCount() throws {
+        let value = digest()
+        let updated = value.markingRead(["i2"])
+        XCTAssertTrue(updated.items[0].isRead)
+        XCTAssertEqual(updated.unreadCount, 0)
+        XCTAssertEqual(updated.items[0].duplicateIDs, ["i2"])
+    }
+
     func testCacheKeepsOneRowPerKey() throws {
         let value = digest()
         try cache.save(value, accountID: "local-default", configuration: configuration, maximumArticles: 30, deepReadLimit: 5)

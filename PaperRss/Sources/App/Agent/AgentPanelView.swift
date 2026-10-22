@@ -341,6 +341,22 @@ final class AgentPanelModel: ObservableObject {
         do {
             try controller.confirmPendingProposal(selectedIDs: selectedIDs)
             actionError = nil
+            if let action = controller.lastExecutedAction {
+                let affected = Set(action.affectedIDs)
+                if let updated = digest?.markingRead(affected) {
+                    digest = updated
+                    if let configuration {
+                        try? digestCache.save(
+                            updated,
+                            accountID: store.activeAccountID,
+                            configuration: configuration,
+                            maximumArticles: 30,
+                            deepReadLimit: 5
+                        )
+                    }
+                }
+            }
+            refreshScope()
             scheduleUndoClear()
         } catch {
             actionError = error.localizedDescription

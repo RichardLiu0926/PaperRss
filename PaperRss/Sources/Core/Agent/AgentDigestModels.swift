@@ -124,6 +124,47 @@ public struct AgentDigest: Codable, Hashable, Sendable {
     public var laterCount: Int { items(for: .later).count }
     public var failedCount: Int { items.filter(\.analysisFailed).count }
     public var clusteredArticleCount: Int { items.reduce(0) { $0 + $1.duplicateIDs.count } }
+
+    /// Marks the selected articles (including same-story duplicates) as read
+    /// without rebuilding the whole triage. Used after a confirmed write so the
+    /// result card does not keep offering an already-applied action.
+    public func markingRead(_ selectedIDs: Set<String>) -> AgentDigest {
+        var newlyRead = 0
+        var changed = false
+        let updated = items.map { item -> AgentDigestItem in
+            guard !item.isRead else { return item }
+            let matched = selectedIDs.contains(item.id)
+                || item.duplicateIDs.contains { selectedIDs.contains($0) }
+            guard matched else { return item }
+            changed = true
+            newlyRead += 1 + item.duplicateIDs.count
+            return AgentDigestItem(
+                id: item.id,
+                title: item.title,
+                feedTitle: item.feedTitle,
+                url: item.url,
+                publishedAt: item.publishedAt,
+                verdict: item.verdict,
+                reason: item.reason,
+                bullets: item.bullets,
+                isRead: true,
+                isStarred: item.isStarred,
+                analysisFailed: item.analysisFailed,
+                duplicateIDs: item.duplicateIDs,
+                clusterReason: item.clusterReason
+            )
+        }
+        guard changed else { return self }
+        return AgentDigest(
+            scope: scope,
+            generatedAt: generatedAt,
+            unreadCount: max(0, unreadCount - newlyRead),
+            analyzedCount: analyzedCount,
+            deepReadCount: deepReadCount,
+            model: model,
+            items: updated
+        )
+    }
 }
 
 public enum AgentDigestProgress: Equatable, Sendable {
